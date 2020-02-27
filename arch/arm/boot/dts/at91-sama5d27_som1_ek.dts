@@ -53,8 +53,7 @@
 		};
 
 		sdmmc0: sdio-host@a0000000 {
-			no-1-8-v;
-			bus-width = <4>;
+			bus-width = <8>;
 			pinctrl-names = "default";
 			pinctrl-0 = <&pinctrl_sdmmc0_default>;
 			status = "okay";
@@ -364,12 +363,17 @@
 							 <PIN_PA2__SDMMC0_DAT0>,
 							 <PIN_PA3__SDMMC0_DAT1>,
 							 <PIN_PA4__SDMMC0_DAT2>,
-							 <PIN_PA5__SDMMC0_DAT3>;
+							 <PIN_PA5__SDMMC0_DAT3>,
+							 <PIN_PA6__SDMMC0_DAT4>,
+							 <PIN_PA7__SDMMC0_DAT5>,
+							 <PIN_PA8__SDMMC0_DAT6>,
+							 <PIN_PA9__SDMMC0_DAT7>;
 						bias-disable;
 					};
 
 					ck_cd_vddsel {
 						pinmux = <PIN_PA0__SDMMC0_CK>,
+							 <PIN_PA11__SDMMC0_VDDSEL>,
 							 <PIN_PA13__SDMMC0_CD>;
 						bias-disable;
 					};
