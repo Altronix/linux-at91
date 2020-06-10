@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * at91-sama5d27_som1_m5.dts - Device Tree file for SAMA5D27-SOM1-EK board
+ * at91-sama5d27_som1_ek.dts - Device Tree file for SAMA5D27-SOM1-EK board
  *
  *  Copyright (c) 2017, Microchip Technology Inc.
  *                2016 Nicolas Ferre <nicolas.ferre@atmel.com>
@@ -14,7 +14,7 @@
 
 / {
 	model = "Atmel SAMA5D27 SOM1 EK";
-	compatible = "atmel,sama5d27-som1-m5", "atmel,sama5d27-som1", "atmel,sama5d27", "atmel,sama5d2", "atmel,sama5";
+	compatible = "atmel,sama5d27-som1-ek", "atmel,sama5d27-som1", "atmel,sama5d27", "atmel,sama5d2", "atmel,sama5";
 
 	aliases {
 		serial0 = &uart1;	/* DBGU */
@@ -52,12 +52,73 @@
 			status = "okay";
 		};
 
+		ebi: ebi@10000000 {
+			pinctrl-names = "default";
+			pinctrl-0 = <&pinctrl_nand_default>;
+			status = "okay"; /* conflicts with sdmmc1 and qspi0 */
+			/*status = "disabled"; /* conflicts with sdmmc1 and qspi0 */
+
+			nand_controller: nand-controller {
+				status = "okay";
+
+				nand@3 {
+					reg = <0x3 0x0 0x2>;
+					atmel,rb = <0>;
+					nand-bus-width = <8>;
+					nand-ecc-mode = "hw";
+					nand-on-flash-bbt;
+					label = "atmel_nand";
+
+					partitions {
+						compatible = "fixed-partitions";
+						#address-cells = <1>;
+						#size-cells = <1>;
+
+						at91bootstrap@0 {
+							label = "bootstrap";
+							reg = <0x0 0x40000>;
+						};
+
+						bootloader@40000 {
+							label = "bootloader";
+							reg = <0x40000 0xc0000>;
+						};
+
+						bootloaderenvred@0x100000 {
+							label = "bootloader env redundant";
+							reg = <0x100000 0x40000>;
+						};
+
+						bootloaderenv@0x140000 {
+							label = "bootloader env";
+							reg = <0x140000 0x40000>;
+						};
+
+						dtb@180000 {
+							label = "device tree";
+							reg = <0x180000 0x80000>;
+						};
+
+						kernel@200000 {
+							label = "kernel";
+							reg = <0x200000 0x600000>;
+						};
+
+						rootfs@800000 {
+							label = "rootfs";
+							reg = <0x800000 0x1f800000>;
+						};
+					};
+				};
+			};
+		};
+
 		sdmmc0: sdio-host@a0000000 {
 			no-1-8-v;
 			bus-width = <4>;
 			pinctrl-names = "default";
 			pinctrl-0 = <&pinctrl_sdmmc0_default>;
-			status = "okay";
+			status = "disabled"; /* conflicts with flash */
 		};
 
 		sdmmc1: sdio-host@b0000000 {
@@ -90,7 +151,7 @@
 			isc: isc@f0008000 {
 				pinctrl-names = "default";
 				pinctrl-0 = <&pinctrl_isc_base &pinctrl_isc_data_8bit &pinctrl_isc_data_9_10 &pinctrl_isc_data_11_12>;
-				status = "okay";
+				status = "disabled"; /* Not in use. */
 			};
 
 			qspi1: spi@f0024000 {
@@ -100,7 +161,14 @@
 			spi0: spi@f8000000 {
 				pinctrl-names = "default";
 				pinctrl-0 = <&pinctrl_spi0_default>;
+				cs-gpios = <&pioA 17 0>;
 				status = "okay";
+				spidev:spidev@0 {
+					compatible = "linux,spidev";
+					reg = <0>;
+					spi-max-frequency = <24000000>;
+				};
+
 			};
 
 			macb0: ethernet@f8008000 {
@@ -352,10 +420,35 @@
 				};
 
 				pinctrl_led_gpio_default: led_gpio_default {
-					pinmux = <PIN_PA10__GPIO>,
+					pinmux = <PIN_PB26__GPIO>,
 						 <PIN_PB1__GPIO>,
-						 <PIN_PA31__GPIO>;
+						 <PIN_PC23__GPIO>;
 					bias-pull-up;
+				};
+
+				pinctrl_nand_default: nand_default {
+					re_we_data {
+						pinmux = <PIN_PA0__D0>,
+							 <PIN_PA1__D1>,
+							 <PIN_PA2__D2>,
+							 <PIN_PA3__D3>,
+							 <PIN_PA4__D4>,
+							 <PIN_PA5__D5>,
+							 <PIN_PA6__D6>,
+							 <PIN_PA7__D7>,
+							 <PIN_PA8__NWE_NANDWE>,
+							 <PIN_PA12__NRD_NANDOE>;
+						bias-pull-up;
+						/*atmel,drive-strength = <ATMEL_PIO_DRVSTR_ME>;  */
+					};
+
+					ale_cle_rdy_cs {
+						pinmux = <PIN_PA10__A21_NANDALE>,
+							 <PIN_PA11__A22_NANDCLE>,
+							 <PIN_PD8__NANDRDY>,
+							 <PIN_PA9__NCS3>;
+						bias-pull-up;
+					};
 				};
 
 				pinctrl_sdmmc0_default: sdmmc0_default {
@@ -397,7 +490,8 @@
 						 <PIN_PA15__SPI0_MOSI>,
 						 <PIN_PA16__SPI0_MISO>,
 						 <PIN_PA17__SPI0_NPCS0>;
-					bias-disable;
+					bias-pull-up;
+					/*bias-disable;*/
 				};
 
 				pinctrl_uart1_default: uart1_default {
@@ -538,7 +632,7 @@
 
 		red {
 			label = "red";
-			gpios = <&pioA PIN_PA10 GPIO_ACTIVE_HIGH>;
+			gpios = <&pioA PIN_PB26 GPIO_ACTIVE_HIGH>;
 		};
 
 		green {
@@ -548,7 +642,7 @@
 
 		blue {
 			label = "blue";
-			gpios = <&pioA PIN_PA31 GPIO_ACTIVE_HIGH>;
+			gpios = <&pioA PIN_PC23 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "heartbeat";
 		};
 	};
