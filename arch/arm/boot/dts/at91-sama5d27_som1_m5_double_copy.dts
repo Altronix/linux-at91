@@ -77,37 +77,37 @@
 						dtb_a@0 {
 							label = "device tree a";
 							reg = <0x0 0x80000>;
-						}
+						};
 
 						kernel_a@80000 {
 							label = "kernel a";
 							reg = <0x80000 0x600000>;
-						}
+						};
 
 						rootfs_a@680000 {
 							label = "rootfs a";
 							reg = <0x680000 0xf580000>;
-						}
+						};
 
 						dtb_b@fc00000 {
 							label = "device tree b";
 							reg = <0xfc00000 0x80000>;
-						}
+						};
 
 						kernel_b@fc80000 {
 							label = "kernel b";
 							reg = <0xfc80000 0x600000>;
-						}
+						};
 
 						rootfs_b@10280000 {
 							label = "rootfs b";
 							reg = <0x10280000 0xf580000>;
-						}
+						};
 
 						data@1f800000 {
 							label = "data";
 							reg = <0x1f800000 0x800000>;
-						}
+						};
 
 					};
 				};
