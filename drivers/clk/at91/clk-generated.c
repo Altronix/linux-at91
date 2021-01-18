@@ -1,14 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2015 Atmel Corporation,
  *                     Nicolas Ferre <nicolas.ferre@atmel.com>
  *
  * Based on clk-programmable & clk-peripheral drivers by Boris BREZILLON.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/bitfield.h>
@@ -175,7 +170,8 @@ static int clk_generated_determine_rate(struct clk_hw *hw,
 
 	for (div = 1; div < GENERATED_MAX_DIV + 2; div++) {
 		req_parent.rate = req->rate * div;
-		__clk_determine_rate(parent, &req_parent);
+		if (__clk_determine_rate(parent, &req_parent))
+			continue;
 		clk_generated_best_diff(req, parent, req_parent.rate, div,
 					&best_diff, &best_rate);
 
@@ -189,8 +185,8 @@ end:
 		 __clk_get_name((req->best_parent_hw)->clk),
 		 req->best_parent_rate);
 
-	if (best_rate < 0)
-		return best_rate;
+	if (best_rate < 0 || (gck->range.max && best_rate > gck->range.max))
+		return -EINVAL;
 
 	req->rate = best_rate;
 	return 0;

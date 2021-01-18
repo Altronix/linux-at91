@@ -15,11 +15,14 @@ Optional properties:
 - assigned-clocks:	The same with "multclk".
 - assigned-clock-rates	The rate of "multclk" in order to not rely on the
 			gck configuration set by previous components.
+- microchip,sdcal-inverted: when present, polarity on the SDCAL SoC pin is
+  inverted. The default polarity for this signal is described in the datasheet.
+  For instance on SAMA5D2, the pin is usually tied to the GND with a resistor
+  and a capacitor (see "SDMMC I/O Calibration" chapter).
 
+Example:
 
-Examples:
-
-sdmmc0: sdio-host@a0000000 {
+mmc0: sdio-host@a0000000 {
 	compatible = "atmel,sama5d2-sdhci";
 	reg = <0xa0000000 0x300>;
 	interrupts = <31 IRQ_TYPE_LEVEL_HIGH 0>;
@@ -27,14 +30,4 @@ sdmmc0: sdio-host@a0000000 {
 	clock-names = "hclock", "multclk", "baseclk";
 	assigned-clocks = <&sdmmc0_gclk>;
 	assigned-clock-rates = <480000000>;
-};
-
-sdmmc0: sdio-host@80000000 {
-	compatible = "microchip,sam9x60-sdhci";
-	reg = <0x80000000 0x300>;
-	interrupts = <12 IRQ_TYPE_LEVEL_HIGH 0>;
-	clocks = <&pmc PMC_TYPE_PERIPHERAL 12>, <&pmc PMC_TYPE_GCK 12>;
-	clock-names = "hclock", "multclk";
-	assigned-clocks = <&pmc PMC_TYPE_GCK 12>;
-	assigned-clock-rates = <100000000>;
 };

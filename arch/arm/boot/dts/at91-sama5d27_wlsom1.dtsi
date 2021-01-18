@@ -17,6 +17,10 @@
 	model = "Microchip SAMA5D27 WLSOM1";
 	compatible = "microchip,sama5d27-wlsom1", "atmel,sama5d27", "atmel,sama5d2", "atmel,sama5";
 
+	aliases {
+		i2c0 = &i2c0;
+	};
+
 	clocks {
 		slow_xtal {
 			clock-frequency = <32768>;
@@ -33,66 +37,49 @@
 		powerdown-gpios = <&pioA PIN_PA29 GPIO_ACTIVE_HIGH>;
 		pinctrl-0 = <&pinctrl_wilc_pwrseq>;
 		pinctrl-names = "default";
-		status = "disabled";
+		status = "okay";
 	};
 };
 
-&main_osc {
-	atmel,osc-bypass;
+&flx1 {
+	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_USART>;
+	status = "okay";
+
+	uart6: serial@200 {
+		compatible = "atmel,at91sam9260-usart";
+		reg = <0x200 0x200>;
+		interrupts = <20 IRQ_TYPE_LEVEL_HIGH 7>;
+		dmas = <&dma0
+			(AT91_XDMAC_DT_MEM_IF(0) | AT91_XDMAC_DT_PER_IF(1) |
+			 AT91_XDMAC_DT_PERID(13))>,
+		       <&dma0
+			(AT91_XDMAC_DT_MEM_IF(0) | AT91_XDMAC_DT_PER_IF(1) |
+			 AT91_XDMAC_DT_PERID(14))>;
+		dma-names = "tx", "rx";
+		clocks = <&pmc PMC_TYPE_PERIPHERAL 20>;
+		clock-names = "usart";
+		pinctrl-0 = <&pinctrl_flx1_default>;
+		pinctrl-names = "default";
+		status = "okay";
+	};
 };
 
-&qspi1 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_qspi1_default>;
-	status = "disabled";
-
-	qspi1_flash: spi_flash@0 {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "jedec,spi-nor";
-		reg = <0>;
-		spi-max-frequency = <80000000>;
-		spi-rx-bus-width = <4>;
-		spi-tx-bus-width = <4>;
-		m25p,fast-read;
-		status = "disabled";
-
-		at91bootstrap@0 {
-			label = "at91bootstrap";
-			reg = <0x0 0x40000>;
-		};
-
-		bootloader@40000 {
-			label = "bootloader";
-			reg = <0x40000 0xc0000>;
-		};
-
-		bootloaderenvred@100000 {
-			label = "bootloader env redundant";
-			reg = <0x100000 0x40000>;
-		};
-
-		bootloaderenv@140000 {
-			label = "bootloader env";
-			reg = <0x140000 0x40000>;
-		};
-
-		dtb@180000 {
-			label = "device tree";
-			reg = <0x180000 0x80000>;
-		};
-
-		kernel@200000 {
-			label = "kernel";
-			reg = <0x200000 0x600000>;
-		};
-	};
+&i2c0 {
+	pinctrl-0 = <&pinctrl_i2c0_default>;
+	pinctrl-1 = <&pinctrl_i2c0_gpio>;
+	pinctrl-names = "default", "gpio";
+	sda-gpios = <&pioA PIN_PD21 GPIO_ACTIVE_HIGH>;
+	scl-gpios = <&pioA PIN_PD22 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	status = "okay";
 };
 
 &i2c1 {
 	dmas = <0>, <0>;
-	pinctrl-names = "default";
+	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_i2c1_default>;
+	pinctrl-1 = <&pinctrl_i2c1_gpio>;
+	sda-gpios = <&pioA PIN_PD19 GPIO_ACTIVE_HIGH>;
+	scl-gpios = <&pioA PIN_PD20 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	status = "okay";
 
 	mcp16502@5b {
@@ -131,14 +118,14 @@
 
 				regulator-state-standby {
 					regulator-on-in-suspend;
-					regulator-suspend-microvolt=<1200000>;
+					regulator-suspend-microvolt = <1200000>;
 					regulator-changeable-in-suspend;
 					regulator-mode = <4>;
 				};
 
 				regulator-state-mem {
 					regulator-on-in-suspend;
-					regulator-suspend-microvolt=<1200000>;
+					regulator-suspend-microvolt = <1200000>;
 					regulator-changeable-in-suspend;
 					regulator-mode = <4>;
 				};
@@ -173,14 +160,14 @@
 
 				regulator-state-standby {
 					regulator-on-in-suspend;
-					regulator-suspend-microvolt=<1800000>;
+					regulator-suspend-microvolt = <1800000>;
 					regulator-changeable-in-suspend;
 					regulator-mode = <4>;
 				};
 
 				regulator-state-mem {
 					regulator-on-in-suspend;
-					regulator-suspend-microvolt=<1800000>;
+					regulator-suspend-microvolt = <1800000>;
 					regulator-changeable-in-suspend;
 					regulator-mode = <4>;
 				};
@@ -233,16 +220,88 @@
 	};
 };
 
+&pmc {
+	atmel,osc-bypass;
+};
+
+&qspi1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_qspi1_default>;
+	status = "disabled";
+
+	qspi1_flash: spi_flash@0 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <80000000>;
+		spi-rx-bus-width = <4>;
+		spi-tx-bus-width = <4>;
+		m25p,fast-read;
+		status = "disabled";
+
+		at91bootstrap@0 {
+			label = "at91bootstrap";
+			reg = <0x0 0x40000>;
+		};
+
+		bootloader@40000 {
+			label = "bootloader";
+			reg = <0x40000 0xc0000>;
+		};
+
+		bootloaderenvred@100000 {
+			label = "bootloader env redundant";
+			reg = <0x100000 0x40000>;
+		};
+
+		bootloaderenv@140000 {
+			label = "bootloader env";
+			reg = <0x140000 0x40000>;
+		};
+
+		dtb@180000 {
+			label = "device tree";
+			reg = <0x180000 0x80000>;
+		};
+
+		kernel@200000 {
+			label = "kernel";
+			reg = <0x200000 0x600000>;
+		};
+	};
+};
+
 &pioA {
-	pinctrl_i2c1_default: i2c1_default {
-		pinmux = <PIN_PD19__TWD1>,
-			 <PIN_PD20__TWCK1>;
+	pinctrl_flx1_default: flx1_usart_default {
+		pinmux = <PIN_PA24__FLEXCOM1_IO0>,
+			 <PIN_PA23__FLEXCOM1_IO1>,
+			 <PIN_PA25__FLEXCOM1_IO3>,
+			 <PIN_PA26__FLEXCOM1_IO4>;
 		bias-disable;
 	};
 
 	pinctrl_i2c0_default: i2c0_default {
 		pinmux = <PIN_PD21__TWD0>,
 			 <PIN_PD22__TWCK0>;
+		bias-disable;
+	};
+
+	pinctrl_i2c0_gpio: i2c0_gpio {
+		pinmux = <PIN_PD21__GPIO>,
+			 <PIN_PD22__GPIO>;
+		bias-disable;
+	};
+
+	pinctrl_i2c1_default: i2c1_default {
+		pinmux = <PIN_PD19__TWD1>,
+			 <PIN_PD20__TWCK1>;
+		bias-disable;
+	};
+
+	pinctrl_i2c1_gpio: i2c1_gpio {
+		pinmux = <PIN_PD19__GPIO>,
+			 <PIN_PD20__GPIO>;
 		bias-disable;
 	};
 
@@ -265,16 +324,6 @@
 		bias-disable;
 	};
 
-	pinctrl_qspi1_default: qspi1_default {
-		pinmux = <PIN_PB5__QSPI1_SCK>,
-			 <PIN_PB6__QSPI1_CS>,
-			 <PIN_PB7__QSPI1_IO0>,
-			 <PIN_PB8__QSPI1_IO1>,
-			 <PIN_PB9__QSPI1_IO2>,
-			 <PIN_PB10__QSPI1_IO3>;
-		bias-pull-up;
-	};
-
 	pinctrl_sdmmc1_default: sdmmc1_default {
 		cmd-data {
 			pinmux = <PIN_PA28__SDMMC1_CMD>,
@@ -291,12 +340,14 @@
 		};
 	};
 
-	pinctrl_flx1_default: flx1_usart_default {
-		pinmux = <PIN_PA24__FLEXCOM1_IO0>,
-			 <PIN_PA23__FLEXCOM1_IO1>,
-			 <PIN_PA25__FLEXCOM1_IO3>,
-			 <PIN_PA26__FLEXCOM1_IO4>;
-		bias-disable;
+	pinctrl_qspi1_default: qspi1_default {
+		pinmux = <PIN_PB5__QSPI1_SCK>,
+			 <PIN_PB6__QSPI1_CS>,
+			 <PIN_PB7__QSPI1_IO0>,
+			 <PIN_PB8__QSPI1_IO1>,
+			 <PIN_PB9__QSPI1_IO2>,
+			 <PIN_PB10__QSPI1_IO3>;
+		bias-pull-up;
 	};
 
 	pinctrl_wilc_default: wilc_default {
@@ -319,33 +370,6 @@
 	};
 };
 
-&flx1 {
-	atmel,flexcom-mode = <ATMEL_FLEXCOM_MODE_USART>;
-
-	uart6: serial@200 {
-		compatible = "atmel,at91sam9260-usart";
-		reg = <0x200 0x200>;
-		interrupts = <20 IRQ_TYPE_LEVEL_HIGH 7>;
-		dmas = <&dma0
-			(AT91_XDMAC_DT_MEM_IF(0) | AT91_XDMAC_DT_PER_IF(1) |
-			 AT91_XDMAC_DT_PERID(13))>,
-		       <&dma0
-			(AT91_XDMAC_DT_MEM_IF(0) | AT91_XDMAC_DT_PER_IF(1) |
-			 AT91_XDMAC_DT_PERID(14))>;
-		dma-names = "tx", "rx";
-		clocks = <&flx1_clk>;
-		clock-names = "usart";
-		pinctrl-0 = <&pinctrl_flx1_default>;
-		pinctrl-names = "default";
-	};
-};
-
-&i2c0 {
-	pinctrl-0 = <&pinctrl_i2c0_default>;
-	pinctrl-names = "default";
-	status = "okay";
-};
-
 &sdmmc1 {
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -355,6 +379,7 @@
 	mmc-pwrseq = <&wifi_pwrseq>;
 	no-1-8-v;
 	non-removable;
+	status = "okay";
 
 	wilc: wilc@0 {
 		reg = <0>;
@@ -363,10 +388,11 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_wilc_default>;
 		irq-gpios = <&pioA PIN_PB25 GPIO_ACTIVE_LOW>;
-		clocks = <&pck1>;
-		clock-names = "rtc_clk";
-		assigned-clocks = <&pck1>;
+		clocks = <&pmc PMC_TYPE_SYSTEM 9>;
+		clock-names = "rtc";
+		assigned-clocks = <&pmc PMC_TYPE_SYSTEM 9>;
 		assigned-clock-rates = <32768>;
-		status = "disabled";
-	};
+		status = "okay";
+        };
 };
+

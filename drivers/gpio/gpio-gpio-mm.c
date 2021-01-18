@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * GPIO driver for the Diamond Systems GPIO-MM
  * Copyright (C) 2016 William Breathitt Gray
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  *
  * This driver supports the following Diamond Systems devices: GPIO-MM and
  * GPIO-MM-12.
@@ -60,7 +52,10 @@ static int gpiomm_gpio_get_direction(struct gpio_chip *chip,
 	const unsigned int port = offset / 8;
 	const unsigned int mask = BIT(offset % 8);
 
-	return !!(gpiommgpio->io_state[port] & mask);
+	if (gpiommgpio->io_state[port] & mask)
+		return GPIO_LINE_DIRECTION_IN;
+
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static int gpiomm_gpio_direction_input(struct gpio_chip *chip,
@@ -211,7 +206,7 @@ static int gpiomm_gpio_get_multiple(struct gpio_chip *chip, unsigned long *mask,
 		port_state = inb(gpiommgpio->base + ports[i]);
 
 		/* store acquired bits at respective bits array offset */
-		bits[word_index] |= port_state << word_offset;
+		bits[word_index] |= (port_state << word_offset) & word_mask;
 	}
 
 	return 0;

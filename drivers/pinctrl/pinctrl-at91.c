@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * at91 pinctrl driver based on at91 pinmux core
  *
  * Copyright (C) 2011-2012 Jean-Christophe PLAGNIOL-VILLARD <plagnioj@jcrosoft.com>
- *
- * Under GPLv2 only
  */
 
 #include <linux/clk.h>
@@ -16,7 +15,7 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -280,8 +279,8 @@ static int at91_dt_node_to_map(struct pinctrl_dev *pctldev,
 	 */
 	grp = at91_pinctrl_find_group_by_name(info, np->name);
 	if (!grp) {
-		dev_err(info->dev, "unable to find group for node %s\n",
-			np->name);
+		dev_err(info->dev, "unable to find group for node %pOFn\n",
+			np);
 		return -EINVAL;
 	}
 
@@ -1179,7 +1178,7 @@ static int at91_pinctrl_parse_groups(struct device_node *np,
 	const __be32 *list;
 	int i, j;
 
-	dev_dbg(info->dev, "group(%d): %s\n", index, np->name);
+	dev_dbg(info->dev, "group(%d): %pOFn\n", index, np);
 
 	/* Initialise group */
 	grp->name = np->name;
@@ -1230,7 +1229,7 @@ static int at91_pinctrl_parse_functions(struct device_node *np,
 	static u32 grp_index;
 	u32 i = 0;
 
-	dev_dbg(info->dev, "parse function(%d): %s\n", index, np->name);
+	dev_dbg(info->dev, "parse function(%d): %pOFn\n", index, np);
 
 	func = &info->functions[index];
 
@@ -1596,7 +1595,7 @@ static int alt_gpio_irq_type(struct irq_data *d, unsigned type)
 		return 0;
 	case IRQ_TYPE_NONE:
 	default:
-		pr_warn("AT91: No type for irq %d\n", gpio_to_irq(d->irq));
+		pr_warn("AT91: No type for GPIO irq offset %d\n", d->irq);
 		return -EINVAL;
 	}
 
@@ -1683,16 +1682,6 @@ void at91_pinctrl_gpio_resume(void)
 #define gpio_irq_set_wake	NULL
 #endif /* CONFIG_PM */
 
-static struct irq_chip gpio_irqchip = {
-	.name		= "GPIO",
-	.irq_ack	= gpio_irq_ack,
-	.irq_disable	= gpio_irq_mask,
-	.irq_mask	= gpio_irq_mask,
-	.irq_unmask	= gpio_irq_unmask,
-	/* .irq_set_type is set dynamically */
-	.irq_set_wake	= gpio_irq_set_wake,
-};
-
 static void gpio_irq_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
@@ -1733,12 +1722,24 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 	struct gpio_chip	*gpiochip_prev = NULL;
 	struct at91_gpio_chip   *prev = NULL;
 	struct irq_data		*d = irq_get_irq_data(at91_gpio->pioc_virq);
-	int ret, i;
+	struct irq_chip		*gpio_irqchip;
+	struct gpio_irq_chip	*girq;
+	int i;
+
+	gpio_irqchip = devm_kzalloc(&pdev->dev, sizeof(*gpio_irqchip),
+				    GFP_KERNEL);
+	if (!gpio_irqchip)
+		return -ENOMEM;
 
 	at91_gpio->pioc_hwirq = irqd_to_hwirq(d);
 
-	/* Setup proper .irq_set_type function */
-	gpio_irqchip.irq_set_type = at91_gpio->ops->irq_type;
+	gpio_irqchip->name = "GPIO";
+	gpio_irqchip->irq_ack = gpio_irq_ack;
+	gpio_irqchip->irq_disable = gpio_irq_mask;
+	gpio_irqchip->irq_mask = gpio_irq_mask;
+	gpio_irqchip->irq_unmask = gpio_irq_unmask;
+	gpio_irqchip->irq_set_wake = gpio_irq_set_wake,
+	gpio_irqchip->irq_set_type = at91_gpio->ops->irq_type;
 
 	/* Disable irqs of this PIO controller */
 	writel_relaxed(~0, at91_gpio->regbase + PIO_IDR);
@@ -1748,33 +1749,30 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 	 * handler will perform the actual work of handling the parent
 	 * interrupt.
 	 */
-	ret = gpiochip_irqchip_add(&at91_gpio->chip,
-				   &gpio_irqchip,
-				   0,
-				   handle_edge_irq,
-				   IRQ_TYPE_NONE);
-	if (ret) {
-		dev_err(&pdev->dev, "at91_gpio.%d: Couldn't add irqchip to gpiochip.\n",
-			at91_gpio->pioc_idx);
-		return ret;
-	}
+	girq = &at91_gpio->chip.irq;
+	girq->chip = gpio_irqchip;
+	girq->default_type = IRQ_TYPE_NONE;
+	girq->handler = handle_edge_irq;
 
-	/* The top level handler handles one bank of GPIOs, except
+	/*
+	 * The top level handler handles one bank of GPIOs, except
 	 * on some SoC it can handle up to three...
 	 * We only set up the handler for the first of the list.
 	 */
 	gpiochip_prev = irq_get_handler_data(at91_gpio->pioc_virq);
 	if (!gpiochip_prev) {
-		/* Then register the chain on the parent IRQ */
-		gpiochip_set_chained_irqchip(&at91_gpio->chip,
-					     &gpio_irqchip,
-					     at91_gpio->pioc_virq,
-					     gpio_irq_handler);
+		girq->parent_handler = gpio_irq_handler;
+		girq->num_parents = 1;
+		girq->parents = devm_kcalloc(&pdev->dev, 1,
+					     sizeof(*girq->parents),
+					     GFP_KERNEL);
+		if (!girq->parents)
+			return -ENOMEM;
+		girq->parents[0] = at91_gpio->pioc_virq;
 		return 0;
 	}
 
 	prev = gpiochip_get_data(gpiochip_prev);
-
 	/* we can only have 2 banks before */
 	for (i = 0; i < 2; i++) {
 		if (prev->next) {
@@ -1813,7 +1811,6 @@ static const struct of_device_id at91_gpio_of_match[] = {
 static int at91_gpio_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	struct resource *res;
 	struct at91_gpio_chip *at91_chip = NULL;
 	struct gpio_chip *chip;
 	struct pinctrl_gpio_range *range;
@@ -1841,8 +1838,7 @@ static int at91_gpio_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	at91_chip->regbase = devm_ioremap_resource(&pdev->dev, res);
+	at91_chip->regbase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(at91_chip->regbase)) {
 		ret = PTR_ERR(at91_chip->regbase);
 		goto err;
@@ -1904,6 +1900,10 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	range->npins = chip->ngpio;
 	range->gc = chip;
 
+	ret = at91_gpio_of_irq_setup(pdev, at91_chip);
+	if (ret)
+		goto gpiochip_add_err;
+
 	ret = gpiochip_add_data(chip, at91_chip);
 	if (ret)
 		goto gpiochip_add_err;
@@ -1911,16 +1911,10 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	gpio_chips[alias_idx] = at91_chip;
 	gpio_banks = max(gpio_banks, alias_idx + 1);
 
-	ret = at91_gpio_of_irq_setup(pdev, at91_chip);
-	if (ret)
-		goto irq_setup_err;
-
 	dev_info(&pdev->dev, "at address %p\n", at91_chip->regbase);
 
 	return 0;
 
-irq_setup_err:
-	gpiochip_remove(chip);
 gpiochip_add_err:
 clk_enable_err:
 	clk_disable_unprepare(at91_chip->clock);

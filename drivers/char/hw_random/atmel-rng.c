@@ -24,9 +24,9 @@
 
 #define TRNG_KEY	0x524e4700 /* RNG */
 
-#define TRNG_HALFR	BIT(0) /* generate RN at every 168 cycles */
+#define TRNG_HALFR	BIT(0) /* generate RN every 168 cycles */
 
-struct atmel_trng_pdata {
+struct atmel_trng_data {
 	bool has_half_rate;
 };
 
@@ -70,27 +70,25 @@ static void atmel_trng_disable(struct atmel_trng *trng)
 static int atmel_trng_probe(struct platform_device *pdev)
 {
 	struct atmel_trng *trng;
-	struct resource *res;
-	const struct atmel_trng_pdata *pdata;
+	const struct atmel_trng_data *data;
 	int ret;
 
 	trng = devm_kzalloc(&pdev->dev, sizeof(*trng), GFP_KERNEL);
 	if (!trng)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	trng->base = devm_ioremap_resource(&pdev->dev, res);
+	trng->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(trng->base))
 		return PTR_ERR(trng->base);
 
 	trng->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(trng->clk))
 		return PTR_ERR(trng->clk);
-	pdata = of_device_get_match_data(&pdev->dev);
-	if (!pdata)
+	data = of_device_get_match_data(&pdev->dev);
+	if (!data)
 		return -ENODEV;
 
-	if (pdata->has_half_rate) {
+	if (data->has_half_rate) {
 		unsigned long rate = clk_get_rate(trng->clk);
 
 		/* if peripheral clk is above 100MHz, set HALFR */
@@ -106,7 +104,7 @@ static int atmel_trng_probe(struct platform_device *pdev)
 	trng->rng.name = pdev->name;
 	trng->rng.read = atmel_trng_read;
 
-	ret = hwrng_register(&trng->rng);
+	ret = devm_hwrng_register(&pdev->dev, &trng->rng);
 	if (ret)
 		goto err_register;
 
@@ -123,7 +121,6 @@ static int atmel_trng_remove(struct platform_device *pdev)
 {
 	struct atmel_trng *trng = platform_get_drvdata(pdev);
 
-	hwrng_unregister(&trng->rng);
 
 	atmel_trng_disable(trng);
 	clk_disable_unprepare(trng->clk);
@@ -162,11 +159,11 @@ static const struct dev_pm_ops atmel_trng_pm_ops = {
 };
 #endif /* CONFIG_PM */
 
-static struct atmel_trng_pdata at91sam9g45_config = {
+static const struct atmel_trng_data at91sam9g45_config = {
 	.has_half_rate = false,
 };
 
-static struct atmel_trng_pdata sam9x60_config = {
+static const struct atmel_trng_data sam9x60_config = {
 	.has_half_rate = true,
 };
 

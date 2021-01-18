@@ -1,8 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * U300 GPIO module.
  *
  * Copyright (C) 2007-2012 ST-Ericsson AB
- * License terms: GNU General Public License (GPL) version 2
  * COH 901 571/3 - Used in DB3210 (U365 2.0) and DB3350 (U335 1.0)
  * Author: Linus Walleij <linus.walleij@linaro.org>
  * Author: Jonas Aaberg <jonas.aberg@stericsson.com>
@@ -15,7 +15,7 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/slab.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/pinctrl/pinconf-generic.h>
@@ -615,7 +615,6 @@ static struct coh901_pinpair coh901_pintable[] = {
 static int __init u300_gpio_probe(struct platform_device *pdev)
 {
 	struct u300_gpio *gpio;
-	struct resource *memres;
 	int err = 0;
 	int portno;
 	u32 val;
@@ -632,8 +631,7 @@ static int __init u300_gpio_probe(struct platform_device *pdev)
 	gpio->chip.base = 0;
 	gpio->dev = &pdev->dev;
 
-	memres = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	gpio->base = devm_ioremap_resource(&pdev->dev, memres);
+	gpio->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(gpio->base))
 		return PTR_ERR(gpio->base);
 

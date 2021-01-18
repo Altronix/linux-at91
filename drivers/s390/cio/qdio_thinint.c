@@ -40,7 +40,7 @@ static LIST_HEAD(tiq_list);
 static DEFINE_MUTEX(tiq_list_lock);
 
 /* Adapter interrupt definitions */
-static void tiqdio_thinint_handler(struct airq_struct *airq);
+static void tiqdio_thinint_handler(struct airq_struct *airq, bool floating);
 
 static struct airq_struct tiqdio_airq = {
 	.handler = tiqdio_thinint_handler,
@@ -177,8 +177,9 @@ static inline void tiqdio_call_inq_handlers(struct qdio_irq *irq)
 /**
  * tiqdio_thinint_handler - thin interrupt handler for qdio
  * @airq: pointer to adapter interrupt descriptor
+ * @floating: flag to recognize floating vs. directed interrupts (unused)
  */
-static void tiqdio_thinint_handler(struct airq_struct *airq)
+static void tiqdio_thinint_handler(struct airq_struct *airq, bool floating)
 {
 	u32 si_used = clear_shared_ind();
 	struct qdio_q *q;
@@ -267,17 +268,19 @@ int __init tiqdio_register_thinints(void)
 
 int qdio_establish_thinint(struct qdio_irq *irq_ptr)
 {
+	int rc;
+
 	if (!is_thinint_irq(irq_ptr))
 		return 0;
-	return set_subchannel_ind(irq_ptr, 0);
-}
 
-void qdio_setup_thinint(struct qdio_irq *irq_ptr)
-{
-	if (!is_thinint_irq(irq_ptr))
-		return;
 	irq_ptr->dsci = get_indicator();
 	DBF_HEX(&irq_ptr->dsci, sizeof(void *));
+
+	rc = set_subchannel_ind(irq_ptr, 0);
+	if (rc)
+		put_indicator(irq_ptr->dsci);
+
+	return rc;
 }
 
 void qdio_shutdown_thinint(struct qdio_irq *irq_ptr)

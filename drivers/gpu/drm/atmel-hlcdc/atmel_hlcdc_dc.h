@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2014 Traphandler
  * Copyright (C) 2014 Free Electrons
@@ -5,40 +6,17 @@
  *
  * Author: Jean-Jacques Hiblot <jjhiblot@traphandler.com>
  * Author: Boris BREZILLON <boris.brezillon@free-electrons.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef DRM_ATMEL_HLCDC_H
 #define DRM_ATMEL_HLCDC_H
 
-#include <linux/clk.h>
-#include <linux/dmapool.h>
-#include <linux/irqdomain.h>
-#include <linux/mfd/atmel-hlcdc.h>
-#include <linux/pwm.h>
+#include <linux/regmap.h>
 
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_fb_cma_helper.h>
-#include <drm/drm_gem_cma_helper.h>
-#include <drm/drm_gem_framebuffer_helper.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_plane_helper.h>
-#include <drm/drmP.h>
+#include <drm/drm_encoder.h>
+#include <drm/drm_modes.h>
+#include <drm/drm_plane.h>
 
 #define ATMEL_HLCDC_LAYER_CHER			0x0
 #define ATMEL_HLCDC_LAYER_CHDR			0x4

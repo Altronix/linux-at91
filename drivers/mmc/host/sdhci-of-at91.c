@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Atmel SDMMC controller driver.
  *
  * Copyright (C) 2015 Atmel,
  *		 2015 Ludovic Desroches <ludovic.desroches@atmel.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -35,6 +27,9 @@
 #define SDMMC_CACR	0x230
 #define		SDMMC_CACR_CAPWREN	BIT(0)
 #define		SDMMC_CACR_KEY		(0x46 << 8)
+#define SDMMC_CALCR	0x240
+#define		SDMMC_CALCR_EN		BIT(0)
+#define		SDMMC_CALCR_ALWYSON	BIT(4)
 
 #define SDHCI_AT91_PRESET_COMMON_CONF	0x400 /* drv type B, programmable clock mode */
 
@@ -50,6 +45,7 @@ struct sdhci_at91_priv {
 	struct clk *gck;
 	struct clk *mainck;
 	bool restore_needed;
+	bool cal_always_on;
 };
 
 static void sdhci_at91_set_force_card_detect(struct sdhci_host *host)
@@ -131,10 +127,18 @@ static void sdhci_at91_set_uhs_signaling(struct sdhci_host *host,
 
 static void sdhci_at91_reset(struct sdhci_host *host, u8 mask)
 {
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_at91_priv *priv = sdhci_pltfm_priv(pltfm_host);
+
 	sdhci_reset(host, mask);
 
-	if (host->mmc->caps & MMC_CAP_NONREMOVABLE)
+	if ((host->mmc->caps & MMC_CAP_NONREMOVABLE)
+	    || mmc_gpio_get_cd(host->mmc) >= 0)
 		sdhci_at91_set_force_card_detect(host);
+
+	if (priv->cal_always_on && (mask & SDHCI_RESET_ALL))
+		sdhci_writel(host, SDMMC_CALCR_ALWYSON | SDMMC_CALCR_EN,
+			     SDMMC_CALCR);
 }
 
 static const struct sdhci_ops sdhci_at91_sama5d2_ops = {
@@ -202,10 +206,10 @@ static int sdhci_at91_set_clks_presets(struct device *dev)
 	clk_base = clk_base_rate / 1000000;
 	clk_mul = gck_rate / clk_base_rate - 1;
 
-	caps0 &= (~SDHCI_CLOCK_V3_BASE_MASK);
-	caps0 |= ((clk_base << SDHCI_CLOCK_BASE_SHIFT) & SDHCI_CLOCK_V3_BASE_MASK);
-	caps1 &= (~SDHCI_CLOCK_MUL_MASK);
-	caps1 |= ((clk_mul << SDHCI_CLOCK_MUL_SHIFT) & SDHCI_CLOCK_MUL_MASK);
+	caps0 &= ~SDHCI_CLOCK_V3_BASE_MASK;
+	caps0 |= (clk_base << SDHCI_CLOCK_BASE_SHIFT) & SDHCI_CLOCK_V3_BASE_MASK;
+	caps1 &= ~SDHCI_CLOCK_MUL_MASK;
+	caps1 |= (clk_mul << SDHCI_CLOCK_MUL_SHIFT) & SDHCI_CLOCK_MUL_MASK;
 	/* Set capabilities in r/w mode. */
 	writel(SDMMC_CACR_KEY | SDMMC_CACR_CAPWREN, host->ioaddr + SDMMC_CACR);
 	writel(caps0, host->ioaddr + SDHCI_CAPABILITIES);
@@ -213,8 +217,8 @@ static int sdhci_at91_set_clks_presets(struct device *dev)
 	/* Set capabilities in ro mode. */
 	writel(0, host->ioaddr + SDMMC_CACR);
 
-	dev_info(dev, "update clk mul to %u as gck rate is %u Hz and clk base is %u Hz\n",
-		 clk_mul, gck_rate, clk_base_rate);
+	dev_dbg(dev, "update clk mul to %u as gck rate is %u Hz and clk base is %u Hz\n",
+		clk_mul, gck_rate, clk_base_rate);
 
 	/*
 	 * We have to set preset values because it depends on the clk_mul
@@ -315,7 +319,7 @@ static int sdhci_at91_runtime_resume(struct device *dev)
 	}
 
 out:
-	return sdhci_runtime_resume_host(host);
+	return sdhci_runtime_resume_host(host, 0);
 }
 #endif /* CONFIG_PM */
 
@@ -354,20 +358,23 @@ static int sdhci_at91_probe(struct platform_device *pdev)
 			priv->mainck = NULL;
 		} else {
 			dev_err(&pdev->dev, "failed to get baseclk\n");
-			return PTR_ERR(priv->mainck);
+			ret = PTR_ERR(priv->mainck);
+			goto sdhci_pltfm_free;
 		}
 	}
 
 	priv->hclock = devm_clk_get(&pdev->dev, "hclock");
 	if (IS_ERR(priv->hclock)) {
 		dev_err(&pdev->dev, "failed to get hclock\n");
-		return PTR_ERR(priv->hclock);
+		ret = PTR_ERR(priv->hclock);
+		goto sdhci_pltfm_free;
 	}
 
 	priv->gck = devm_clk_get(&pdev->dev, "multclk");
 	if (IS_ERR(priv->gck)) {
 		dev_err(&pdev->dev, "failed to get multclk\n");
-		return PTR_ERR(priv->gck);
+		ret = PTR_ERR(priv->gck);
+		goto sdhci_pltfm_free;
 	}
 
 	ret = sdhci_at91_set_clks_presets(&pdev->dev);
@@ -375,6 +382,14 @@ static int sdhci_at91_probe(struct platform_device *pdev)
 		goto sdhci_pltfm_free;
 
 	priv->restore_needed = false;
+
+	/*
+	 * if SDCAL pin is wrongly connected, we must enable
+	 * the analog calibration cell permanently.
+	 */
+	priv->cal_always_on =
+		device_property_read_bool(&pdev->dev,
+					  "microchip,sdcal-inverted");
 
 	ret = mmc_of_parse(host->mmc);
 	if (ret)
@@ -389,7 +404,7 @@ static int sdhci_at91_probe(struct platform_device *pdev)
 	pm_runtime_use_autosuspend(&pdev->dev);
 
 	/* HS200 is broken at this moment */
-	host->quirks2 = SDHCI_QUIRK2_BROKEN_HS200;
+	host->quirks2 |= SDHCI_QUIRK2_BROKEN_HS200;
 
 	ret = sdhci_add_host(host);
 	if (ret)
@@ -425,11 +440,12 @@ static int sdhci_at91_probe(struct platform_device *pdev)
 	 * detection procedure using the SDMCC_CD signal is bypassed.
 	 * This bit is reset when a software reset for all command is performed
 	 * so we need to implement our own reset function to set back this bit.
+	 *
+	 * WA: SAMA5D2 doesn't drive CMD if using CD GPIO line.
 	 */
-	if (host->mmc->caps & MMC_CAP_NONREMOVABLE)
+	if ((host->mmc->caps & MMC_CAP_NONREMOVABLE)
+	    || mmc_gpio_get_cd(host->mmc) >= 0)
 		sdhci_at91_set_force_card_detect(host);
-
-	device_init_wakeup(&pdev->dev, true);
 
 	pm_runtime_put_autosuspend(&pdev->dev);
 

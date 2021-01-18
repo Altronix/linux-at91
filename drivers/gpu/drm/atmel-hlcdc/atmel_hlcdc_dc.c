@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Traphandler
  * Copyright (C) 2014 Free Electrons
@@ -5,25 +6,26 @@
  *
  * Author: Jean-Jacques Hiblot <jjhiblot@traphandler.com>
  * Author: Boris BREZILLON <boris.brezillon@free-electrons.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/clk.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
+#include <linux/mfd/atmel-hlcdc.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <linux/platform_device.h>
+
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_irq.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
 
 #include "atmel_hlcdc_dc.h"
 #include "gfx2d/gfx2d_gpu.h"
@@ -844,9 +846,9 @@ static void atmel_hlcdc_dc_irq_uninstall(struct drm_device *dev)
 DEFINE_DRM_GEM_CMA_FOPS(fops);
 
 /*
- * ioctl to export the physical address of GEM to user space for
- * video decoder
- */
+ioctl to export the physical address of GEM to user space for
+video decoder
+*/
 int atmel_drm_gem_get_ioctl(struct drm_device *drm, void *data,
 				      struct drm_file *file_priv)
 {
@@ -866,7 +868,7 @@ int atmel_drm_gem_get_ioctl(struct drm_device *drm, void *data,
 	cma_obj = to_drm_gem_cma_obj(gem_obj);
 	args->offset = (__u64)cma_obj->paddr;
 
-	drm_gem_object_unreference(gem_obj);
+	drm_gem_object_put(gem_obj);
 
 	mutex_unlock(&drm->struct_mutex);
 
@@ -879,23 +881,11 @@ static int gfx2d_ioctl_submit(struct drm_device *dev, void *data,
 	struct atmel_hlcdc_dc *priv = dev->dev_private;
 	struct gfx2d_gpu *gpu = priv->gpu;
 	struct drm_gfx2d_submit *args = data;
-	uint32_t buf[128];
-	int ret = 0;
 
 	if (!gpu)
 		return -ENXIO;
 
-	if (args->size * sizeof(__u32) > sizeof(buf))
-		return -EIO;
-
-	ret = copy_from_user(buf, (const void __user *)args->buf,
-			     args->size * sizeof(__u32));
-	if (ret) {
-		ret = -EFAULT;
-		return ret;
-	}
-
-	return gfx2d_submit(gpu, buf, args->size);
+	return gfx2d_submit(gpu, (uint32_t *)args->buf, args->size);
 }
 
 static int gfx2d_ioctl_flush(struct drm_device *dev, void *data,
@@ -917,9 +907,7 @@ static int gfx2d_ioctl_gem_addr(struct drm_device *dev, void *data,
 
 	mutex_lock(&dev->object_name_lock);
 	obj = idr_find(&dev->object_name_idr, (int) args->name);
-	if (obj) {
-		drm_gem_object_reference(obj);
-	} else {
+	if (!obj) {
 		mutex_unlock(&dev->object_name_lock);
 		return -ENOENT;
 	}
@@ -1007,9 +995,7 @@ static void load_gpu(struct drm_device *dev)
 }
 
 static struct drm_driver atmel_hlcdc_dc_driver = {
-	.driver_features = DRIVER_GEM |
-			   DRIVER_MODESET | DRIVER_PRIME |
-			   DRIVER_ATOMIC,
+	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.irq_handler = atmel_hlcdc_dc_irq_handler,
 	.irq_preinstall = atmel_hlcdc_dc_irq_uninstall,
 	.irq_postinstall = atmel_hlcdc_dc_irq_postinstall,
@@ -1028,7 +1014,7 @@ static struct drm_driver atmel_hlcdc_dc_driver = {
 	.debugfs_init       = atmel_hlcdc_dc_debugfs_init,
 #endif
 	.ioctls	= atmel_ioctls,
-	.num_ioctls = ARRAY_SIZE(atmel_ioctls),
+	.num_ioctls= ARRAY_SIZE(atmel_ioctls),
 	.fops = &fops,
 	.name = "atmel-hlcdc",
 	.desc = "Atmel HLCD Controller DRM",
@@ -1053,7 +1039,7 @@ static int atmel_hlcdc_dc_bind(struct device *dev)
 
 	ret = atmel_hlcdc_dc_load(ddev);
 	if (ret)
-		goto out_unref;
+		goto err_put;
 
 	dev_set_drvdata(dev, ddev);
 
@@ -1069,15 +1055,15 @@ static int atmel_hlcdc_dc_bind(struct device *dev)
 
 	drm_fbdev_generic_setup(ddev, 24);
 
-	dev_info(ddev->dev, "DRM device successfully registered\n");
 	return 0;
 
 out_register:
 	component_unbind_all(dev, ddev);
 out_bind:
 	atmel_hlcdc_dc_unload(ddev);
-out_unref:
-	drm_dev_unref(ddev);
+
+err_put:
+	drm_dev_put(ddev);
 
 	return ret;
 }

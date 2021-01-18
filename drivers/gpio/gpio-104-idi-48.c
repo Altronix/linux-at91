@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * GPIO driver for the ACCES 104-IDI-48 family
  * Copyright (C) 2015 William Breathitt Gray
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  *
  * This driver supports the following ACCES devices: 104-IDI-48A,
  * 104-IDI-48AC, 104-IDI-48B, and 104-IDI-48BC.
@@ -61,7 +53,7 @@ struct idi_48_gpio {
 
 static int idi_48_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
 {
-	return 1;
+	return GPIO_LINE_DIRECTION_IN;
 }
 
 static int idi_48_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
@@ -128,7 +120,7 @@ static int idi_48_gpio_get_multiple(struct gpio_chip *chip, unsigned long *mask,
 		port_state = inb(idi48gpio->base + ports[i]);
 
 		/* store acquired bits at respective bits array offset */
-		bits[word_index] |= port_state << word_offset;
+		bits[word_index] |= (port_state << word_offset) & word_mask;
 	}
 
 	return 0;

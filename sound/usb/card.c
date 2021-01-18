@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   (Tentative) USB Audio Driver for ALSA
  *
@@ -8,21 +9,6 @@
  *	    Thomas Sailer (sailer@ife.ee.ethz.ch)
  *
  *   Audio Class 3.0 support by Ruslan Bilovol <ruslan.bilovol@gmail.com>
- *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the Free Software
- *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
- *
  *
  *  NOTES:
  *
@@ -68,6 +54,7 @@
 #include "format.h"
 #include "power.h"
 #include "stream.h"
+#include "media.h"
 
 MODULE_AUTHOR("Takashi Iwai <tiwai@suse.de>");
 MODULE_DESCRIPTION("USB Audio");
@@ -610,6 +597,10 @@ static int usb_audio_probe(struct usb_interface *intf,
 		}
 	}
 	if (! chip) {
+		err = snd_usb_apply_boot_quirk_once(dev, intf, quirk, id);
+		if (err < 0)
+			goto __error;
+
 		/* it's a fresh one.
 		 * now look for an empty slot and create a new card instance
 		 */
@@ -668,10 +659,19 @@ static int usb_audio_probe(struct usb_interface *intf,
 			goto __error;
 	}
 
-	/* we are allowed to call snd_card_register() many times */
-	err = snd_card_register(chip->card);
-	if (err < 0)
-		goto __error;
+	/* we are allowed to call snd_card_register() many times, but first
+	 * check to see if a device needs to skip it or do anything special
+	 */
+	if (!snd_usb_registration_quirk(chip, ifnum)) {
+		err = snd_card_register(chip->card);
+		if (err < 0)
+			goto __error;
+	}
+
+	if (quirk && quirk->shares_media_device) {
+		/* don't want to fail when snd_media_device_create() fails */
+		snd_media_device_create(chip, intf);
+	}
 
 	usb_chip[chip->index] = chip;
 	chip->num_interfaces++;
@@ -732,6 +732,14 @@ static void usb_audio_disconnect(struct usb_interface *intf)
 		list_for_each(p, &chip->midi_list) {
 			snd_usbmidi_disconnect(p);
 		}
+		/*
+		 * Nice to check quirk && quirk->shares_media_device and
+		 * then call the snd_media_device_delete(). Don't have
+		 * access to the quirk here. snd_media_device_delete()
+		 * accesses mixer_list
+		 */
+		snd_media_device_delete(chip);
+
 		/* release mixer resources */
 		list_for_each_entry(mixer, &chip->mixer_list, list) {
 			snd_usb_mixer_disconnect(mixer);
@@ -806,12 +814,8 @@ static int usb_audio_suspend(struct usb_interface *intf, pm_message_t message)
 	if (chip == (void *)-1L)
 		return 0;
 
-	chip->autosuspended = !!PMSG_IS_AUTO(message);
-	if (!chip->autosuspended)
-		snd_power_change_state(chip->card, SNDRV_CTL_POWER_D3hot);
 	if (!chip->num_suspended_intf++) {
 		list_for_each_entry(as, &chip->pcm_list, list) {
-			snd_pcm_suspend_all(as->pcm);
 			snd_usb_pcm_suspend(as);
 			as->substream[0].need_setup_ep =
 				as->substream[1].need_setup_ep = true;
@@ -820,6 +824,11 @@ static int usb_audio_suspend(struct usb_interface *intf, pm_message_t message)
 			snd_usbmidi_suspend(p);
 		list_for_each_entry(mixer, &chip->mixer_list, list)
 			snd_usb_mixer_suspend(mixer);
+	}
+
+	if (!PMSG_IS_AUTO(message) && !chip->system_suspend) {
+		snd_power_change_state(chip->card, SNDRV_CTL_POWER_D3hot);
+		chip->system_suspend = chip->num_suspended_intf;
 	}
 
 	return 0;
@@ -835,10 +844,10 @@ static int __usb_audio_resume(struct usb_interface *intf, bool reset_resume)
 
 	if (chip == (void *)-1L)
 		return 0;
-	if (--chip->num_suspended_intf)
-		return 0;
 
 	atomic_inc(&chip->active); /* avoid autopm */
+	if (chip->num_suspended_intf > 1)
+		goto out;
 
 	list_for_each_entry(as, &chip->pcm_list, list) {
 		err = snd_usb_pcm_resume(as);
@@ -860,9 +869,12 @@ static int __usb_audio_resume(struct usb_interface *intf, bool reset_resume)
 		snd_usbmidi_resume(p);
 	}
 
-	if (!chip->autosuspended)
+ out:
+	if (chip->num_suspended_intf == chip->system_suspend) {
 		snd_power_change_state(chip->card, SNDRV_CTL_POWER_D0);
-	chip->autosuspended = 0;
+		chip->system_suspend = 0;
+	}
+	chip->num_suspended_intf--;
 
 err_out:
 	atomic_dec(&chip->active); /* allow autopm after this point */

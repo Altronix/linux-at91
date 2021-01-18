@@ -151,7 +151,7 @@ static int fsl_asrc_dma_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	/* Fetch the Back-End dma_data from DPCM */
-	list_for_each_entry(dpcm, &rtd->dpcm[stream].be_clients, list_be) {
+	for_each_dpcm_be(rtd, stream, dpcm) {
 		struct snd_soc_pcm_runtime *be = dpcm->be;
 		struct snd_pcm_substream *substream_be;
 		struct snd_soc_dai *dai = be->cpu_dai;
@@ -241,6 +241,7 @@ static int fsl_asrc_dma_hw_params(struct snd_pcm_substream *substream,
 	ret = dmaengine_slave_config(pair->dma_chan[dir], &config_be);
 	if (ret) {
 		dev_err(dev, "failed to config DMA channel for Back-End\n");
+		dma_release_channel(pair->dma_chan[dir]);
 		return ret;
 	}
 

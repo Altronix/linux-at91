@@ -294,50 +294,6 @@ static void atmel_tasklet_schedule(struct atmel_uart_port *atmel_port,
 		tasklet_schedule(t);
 }
 
-static unsigned int atmel_get_lines_status(struct uart_port *port)
-{
-	struct atmel_uart_port *atmel_port = to_atmel_uart_port(port);
-	unsigned int status, ret = 0;
-
-	status = atmel_uart_readl(port, ATMEL_US_CSR);
-
-	mctrl_gpio_get(atmel_port->gpios, &ret);
-
-	if (!IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(atmel_port->gpios,
-						UART_GPIO_CTS))) {
-		if (ret & TIOCM_CTS)
-			status &= ~ATMEL_US_CTS;
-		else
-			status |= ATMEL_US_CTS;
-	}
-
-	if (!IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(atmel_port->gpios,
-						UART_GPIO_DSR))) {
-		if (ret & TIOCM_DSR)
-			status &= ~ATMEL_US_DSR;
-		else
-			status |= ATMEL_US_DSR;
-	}
-
-	if (!IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(atmel_port->gpios,
-						UART_GPIO_RI))) {
-		if (ret & TIOCM_RI)
-			status &= ~ATMEL_US_RI;
-		else
-			status |= ATMEL_US_RI;
-	}
-
-	if (!IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(atmel_port->gpios,
-						UART_GPIO_DCD))) {
-		if (ret & TIOCM_CD)
-			status &= ~ATMEL_US_DCD;
-		else
-			status |= ATMEL_US_DCD;
-	}
-
-	return status;
-}
-
 /* Enable or disable the rs485 support */
 static int atmel_config_rs485(struct uart_port *port,
 			      struct serial_rs485 *rs485conf)
@@ -357,7 +313,11 @@ static int atmel_config_rs485(struct uart_port *port,
 
 	if (rs485conf->flags & SER_RS485_ENABLED) {
 		dev_dbg(port->dev, "Setting UART to RS485\n");
-		atmel_port->tx_done_mask = ATMEL_US_TXEMPTY;
+		if (port->rs485.flags & SER_RS485_RX_DURING_TX)
+			atmel_port->tx_done_mask = ATMEL_US_TXRDY;
+		else
+			atmel_port->tx_done_mask = ATMEL_US_TXEMPTY;
+
 		atmel_uart_writel(port, ATMEL_US_TTGR,
 				  rs485conf->delay_rts_after_send);
 		mode |= ATMEL_US_USMODE_RS485;
@@ -620,6 +580,7 @@ static void atmel_stop_tx(struct uart_port *port)
 	if (atmel_uart_is_half_duplex(port))
 		if (!atomic_read(&atmel_port->tasklet_shutdown))
 			atmel_start_rx(port);
+
 }
 
 /*
@@ -875,7 +836,7 @@ static void atmel_tx_chars(struct uart_port *port)
 	struct atmel_uart_port *atmel_port = to_atmel_uart_port(port);
 
 	if (port->x_char &&
-	    (atmel_uart_readl(port, ATMEL_US_CSR) & atmel_port->tx_done_mask)) {
+	    (atmel_uart_readl(port, ATMEL_US_CSR) & ATMEL_US_TXRDY)) {
 		atmel_uart_write_char(port, port->x_char);
 		port->icount.tx++;
 		port->x_char = 0;
@@ -883,8 +844,7 @@ static void atmel_tx_chars(struct uart_port *port)
 	if (uart_circ_empty(xmit) || uart_tx_stopped(port))
 		return;
 
-	while (atmel_uart_readl(port, ATMEL_US_CSR) &
-	       atmel_port->tx_done_mask) {
+	while (atmel_uart_readl(port, ATMEL_US_CSR) & ATMEL_US_TXRDY) {
 		atmel_uart_write_char(port, xmit->buf[xmit->tail]);
 		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
 		port->icount.tx++;
@@ -895,10 +855,20 @@ static void atmel_tx_chars(struct uart_port *port)
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
 		uart_write_wakeup(port);
 
-	if (!uart_circ_empty(xmit))
+	if (!uart_circ_empty(xmit)) {
+		/* we still have characters to transmit, so we should continue
+		 * transmitting them when TX is ready, regardless of
+		 * mode or duplexity
+		 */
+		atmel_port->tx_done_mask |= ATMEL_US_TXRDY;
+
 		/* Enable interrupts */
 		atmel_uart_writel(port, ATMEL_US_IER,
 				  atmel_port->tx_done_mask);
+	} else {
+		if (atmel_uart_is_half_duplex(port))
+			atmel_port->tx_done_mask &= ~ATMEL_US_TXRDY;
+	}
 }
 
 static void atmel_complete_tx_dma(void *arg)
@@ -1111,7 +1081,7 @@ static int atmel_prepare_tx_dma(struct uart_port *port)
 
 chan_err:
 	dev_err(port->dev, "TX channel not available, switch to pio\n");
-	atmel_port->use_dma_tx = 0;
+	atmel_port->use_dma_tx = false;
 	if (atmel_port->chan_tx)
 		atmel_release_tx_dma(port);
 	return -EINVAL;
@@ -1310,7 +1280,7 @@ static int atmel_prepare_rx_dma(struct uart_port *port)
 
 chan_err:
 	dev_err(port->dev, "RX channel not available, switch to pio\n");
-	atmel_port->use_dma_rx = 0;
+	atmel_port->use_dma_rx = false;
 	if (atmel_port->chan_rx)
 		atmel_release_rx_dma(port);
 	return -EINVAL;
@@ -1453,7 +1423,7 @@ static irqreturn_t atmel_interrupt(int irq, void *dev_id)
 	spin_lock(&atmel_port->lock_suspended);
 
 	do {
-		status = atmel_get_lines_status(port);
+		status = atmel_uart_readl(port, ATMEL_US_CSR);
 		mask = atmel_uart_readl(port, ATMEL_US_IMR);
 		pending = status & mask;
 		if (!pending)
@@ -1737,7 +1707,7 @@ static int atmel_prepare_rx_pdc(struct uart_port *port)
 					DMA_FROM_DEVICE);
 				kfree(atmel_port->pdc_rx[0].buf);
 			}
-			atmel_port->use_pdc_rx = 0;
+			atmel_port->use_pdc_rx = false;
 			return -ENOMEM;
 		}
 		pdc->dma_addr = dma_map_single(port->dev,
@@ -2002,7 +1972,7 @@ static int atmel_startup(struct uart_port *port)
 	}
 
 	/* Save current CSR for comparison in atmel_tasklet_func() */
-	atmel_port->irq_status_prev = atmel_get_lines_status(port);
+	atmel_port->irq_status_prev = atmel_uart_readl(port, ATMEL_US_CSR);
 
 	/*
 	 * Finally, enable the serial port
@@ -2319,27 +2289,6 @@ static void atmel_set_termios(struct uart_port *port, struct ktermios *termios,
 		mode |= ATMEL_US_USMODE_NORMAL;
 	}
 
-	/* set the mode, clock divisor, parity, stop bits and data size */
-	atmel_uart_writel(port, ATMEL_US_MR, mode);
-
-	/*
-	 * when switching the mode, set the RTS line state according to the
-	 * new mode, otherwise keep the former state
-	 */
-	if ((old_mode & ATMEL_US_USMODE) != (mode & ATMEL_US_USMODE)) {
-		unsigned int rts_state;
-
-		if ((mode & ATMEL_US_USMODE) == ATMEL_US_USMODE_HWHS) {
-			/* let the hardware control the RTS line */
-			rts_state = ATMEL_US_RTSDIS;
-		} else {
-			/* force RTS line to low level */
-			rts_state = ATMEL_US_RTSEN;
-		}
-
-		atmel_uart_writel(port, ATMEL_US_CR, rts_state);
-	}
-
 	/*
 	 * Set the baud rate:
 	 * Fractional baudrate allows to setup output frequency more
@@ -2366,6 +2315,28 @@ static void atmel_set_termios(struct uart_port *port, struct ktermios *termios,
 
 	if (!(port->iso7816.flags & SER_ISO7816_ENABLED))
 		atmel_uart_writel(port, ATMEL_US_BRGR, quot);
+
+	/* set the mode, clock divisor, parity, stop bits and data size */
+	atmel_uart_writel(port, ATMEL_US_MR, mode);
+
+	/*
+	 * when switching the mode, set the RTS line state according to the
+	 * new mode, otherwise keep the former state
+	 */
+	if ((old_mode & ATMEL_US_USMODE) != (mode & ATMEL_US_USMODE)) {
+		unsigned int rts_state;
+
+		if ((mode & ATMEL_US_USMODE) == ATMEL_US_USMODE_HWHS) {
+			/* let the hardware control the RTS line */
+			rts_state = ATMEL_US_RTSDIS;
+		} else {
+			/* force RTS line to low level */
+			rts_state = ATMEL_US_RTSEN;
+		}
+
+		atmel_uart_writel(port, ATMEL_US_CR, rts_state);
+	}
+
 	atmel_uart_writel(port, ATMEL_US_CR, ATMEL_US_RSTSTA | ATMEL_US_RSTRX);
 	atmel_uart_writel(port, ATMEL_US_CR,
 			  mdrop | ATMEL_US_TXEN | ATMEL_US_RXEN);
@@ -2575,8 +2546,7 @@ static int atmel_init_port(struct atmel_uart_port *atmel_port,
 	 * Use TXEMPTY for interrupt when rs485 or ISO7816 else TXRDY or
 	 * ENDTX|TXBUFE
 	 */
-	if (port->rs485.flags & SER_RS485_ENABLED ||
-	    port->iso7816.flags & SER_ISO7816_ENABLED)
+	if (atmel_uart_is_half_duplex(port))
 		atmel_port->tx_done_mask = ATMEL_US_TXEMPTY;
 	else if (atmel_use_pdc_tx(port)) {
 		port->fifosize = PDC_BUFFER_SIZE;
@@ -2893,7 +2863,7 @@ static int atmel_serial_probe(struct platform_device *pdev)
 	struct atmel_uart_port *atmel_port;
 	struct device_node *np = pdev->dev.parent->of_node;
 	void *data;
-	int ret = -ENODEV;
+	int ret;
 	bool rs485_enabled;
 
 	BUILD_BUG_ON(ATMEL_SERIAL_RINGSIZE & (ATMEL_SERIAL_RINGSIZE - 1));

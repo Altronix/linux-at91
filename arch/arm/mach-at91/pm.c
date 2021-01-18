@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/arm/mach-at91/pm.c
  * AT91 Power Management
  *
  * Copyright (C) 2005 David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/genalloc.h>
@@ -596,13 +592,13 @@ static void __init at91_pm_sram_init(void)
 	sram_pool = gen_pool_get(&pdev->dev, NULL);
 	if (!sram_pool) {
 		pr_warn("%s: sram pool unavailable!\n", __func__);
-		return;
+		goto out_put_device;
 	}
 
 	sram_base = gen_pool_alloc(sram_pool, at91_pm_suspend_in_sram_sz);
 	if (!sram_base) {
 		pr_warn("%s: unable to alloc sram!\n", __func__);
-		return;
+		goto out_put_device;
 	}
 
 	sram_pbase = gen_pool_virt_to_phys(sram_pool, sram_base);
@@ -610,12 +606,17 @@ static void __init at91_pm_sram_init(void)
 					at91_pm_suspend_in_sram_sz, false);
 	if (!at91_suspend_sram_fn) {
 		pr_warn("SRAM: Could not map\n");
-		return;
+		goto out_put_device;
 	}
 
 	/* Copy the pm suspend handler to SRAM */
 	at91_suspend_sram_fn = fncpy(at91_suspend_sram_fn,
 			&at91_pm_suspend_in_sram, at91_pm_suspend_in_sram_sz);
+	return;
+
+out_put_device:
+	put_device(&pdev->dev);
+	return;
 }
 
 static bool __init at91_is_pm_mode_active(int pm_mode)
@@ -698,7 +699,7 @@ static void __init at91_pm_use_default_mode(int pm_mode)
 static const struct of_device_id atmel_shdwc_ids[] = {
 	{ .compatible = "atmel,sama5d2-shdwc" },
 	{ .compatible = "microchip,sam9x60-shdwc" },
-	{ /* Sentinel. */ }
+	{ /* sentinel. */ }
 };
 
 static void __init at91_pm_modes_init(void)
@@ -740,13 +741,36 @@ backup_default:
 
 struct pmc_info {
 	unsigned long uhp_udp_mask;
+	unsigned long mckr;
+	unsigned long version;
 };
 
 static const struct pmc_info pmc_infos[] __initconst = {
-	{ .uhp_udp_mask = AT91RM9200_PMC_UHP | AT91RM9200_PMC_UDP },
-	{ .uhp_udp_mask = AT91SAM926x_PMC_UHP | AT91SAM926x_PMC_UDP },
-	{ .uhp_udp_mask = AT91SAM926x_PMC_UHP },
-	{ .uhp_udp_mask = 0 },
+	{
+		.uhp_udp_mask = AT91RM9200_PMC_UHP | AT91RM9200_PMC_UDP,
+		.mckr = 0x30,
+		.version = AT91_PMC_V1,
+	},
+
+	{
+		.uhp_udp_mask = AT91SAM926x_PMC_UHP | AT91SAM926x_PMC_UDP,
+		.mckr = 0x30,
+		.version = AT91_PMC_V1,
+	},
+	{
+		.uhp_udp_mask = AT91SAM926x_PMC_UHP,
+		.mckr = 0x30,
+		.version = AT91_PMC_V1,
+	},
+	{	.uhp_udp_mask = 0,
+		.mckr = 0x30,
+		.version = AT91_PMC_V1,
+	},
+	{
+		.uhp_udp_mask = AT91SAM926x_PMC_UHP | AT91SAM926x_PMC_UDP,
+		.mckr = 0x28,
+		.version = AT91_PMC_V2,
+	},
 };
 
 static const struct of_device_id atmel_pmc_ids[] __initconst = {
@@ -761,7 +785,7 @@ static const struct of_device_id atmel_pmc_ids[] __initconst = {
 	{ .compatible = "atmel,sama5d3-pmc", .data = &pmc_infos[1] },
 	{ .compatible = "atmel,sama5d4-pmc", .data = &pmc_infos[1] },
 	{ .compatible = "atmel,sama5d2-pmc", .data = &pmc_infos[1] },
-	{ .compatible = "microchip,sam9x60-pmc", .data = &pmc_infos[1] },
+	{ .compatible = "microchip,sam9x60-pmc", .data = &pmc_infos[4] },
 	{ /* sentinel */ },
 };
 
@@ -776,6 +800,7 @@ static void __init at91_pm_init(void (*pm_idle)(void))
 
 	pmc_np = of_find_matching_node_and_match(NULL, atmel_pmc_ids, &of_id);
 	soc_pm.data.pmc = of_iomap(pmc_np, 0);
+	of_node_put(pmc_np);
 	if (!soc_pm.data.pmc) {
 		pr_err("AT91: PM not supported, PMC not found\n");
 		return;
@@ -783,6 +808,8 @@ static void __init at91_pm_init(void (*pm_idle)(void))
 
 	pmc = of_id->data;
 	soc_pm.data.uhp_udp_mask = pmc->uhp_udp_mask;
+	soc_pm.data.pmc_mckr_offset = pmc->mckr;
+	soc_pm.data.pmc_version = pmc->version;
 
 	if (pm_idle)
 		arm_pm_idle = pm_idle;
@@ -816,7 +843,7 @@ void __init at91rm9200_pm_init(void)
 
 void __init sam9x60_pm_init(void)
 {
-	if (!IS_ENABLED(CONFIG_SOC_AT91SAM9))
+	if (!IS_ENABLED(CONFIG_SOC_SAM9X60))
 		return;
 
 	at91_pm_modes_init();

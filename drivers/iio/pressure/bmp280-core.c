@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010 Christoph Mair <christoph.mair@gmail.com>
  * Copyright (c) 2012 Bosch Sensortec GmbH
@@ -6,10 +7,6 @@
  * Copyright (c) 2016 Linus Walleij <linus.walleij@linaro.org>
  *
  * Driver for Bosch Sensortec BMP180 and BMP280 digital pressure sensor.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Datasheet:
  * https://ae-bst.resource.bosch.com/media/_tech/media/datasheets/BST-BMP180-DS000-121.pdf
@@ -164,6 +161,9 @@ static int bmp280_read_calib(struct bmp280_data *data,
 		return ret;
 	}
 
+	/* Toss the temperature calibration data into the entropy pool */
+	add_device_randomness(t_buf, sizeof(t_buf));
+
 	calib->T1 = le16_to_cpu(t_buf[T1]);
 	calib->T2 = le16_to_cpu(t_buf[T2]);
 	calib->T3 = le16_to_cpu(t_buf[T3]);
@@ -176,6 +176,9 @@ static int bmp280_read_calib(struct bmp280_data *data,
 			"failed to read pressure calibration parameters\n");
 		return ret;
 	}
+
+	/* Toss the pressure calibration data into the entropy pool */
+	add_device_randomness(p_buf, sizeof(p_buf));
 
 	calib->P1 = le16_to_cpu(p_buf[P1]);
 	calib->P2 = le16_to_cpu(p_buf[P2]);
@@ -260,6 +263,8 @@ static u32 bmp280_compensate_humidity(struct bmp280_data *data,
 		* (((var * (s32)calib->H3) >> 11) + (s32)32768)) >> 10)
 		+ (s32)2097152) * calib->H2 + 8192) >> 14);
 	var -= ((((var >> 15) * (var >> 15)) >> 7) * (s32)calib->H1) >> 4;
+
+	var = clamp_val(var, 0, 419430400);
 
 	return var >> 12;
 };
@@ -703,7 +708,7 @@ static int bmp180_measure(struct bmp280_data *data, u8 ctrl_meas)
 	unsigned int ctrl;
 
 	if (data->use_eoc)
-		init_completion(&data->done);
+		reinit_completion(&data->done);
 
 	ret = regmap_write(data->regmap, BMP280_REG_CTRL_MEAS, ctrl_meas);
 	if (ret)
@@ -959,6 +964,9 @@ static int bmp085_fetch_eoc_irq(struct device *dev,
 			"trying to enforce it\n");
 		irq_trig = IRQF_TRIGGER_RISING;
 	}
+
+	init_completion(&data->done);
+
 	ret = devm_request_threaded_irq(dev,
 			irq,
 			bmp085_eoc_irq,

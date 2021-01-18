@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
-//
-// Copyright (C) 2019 Microchip Technology Inc.
-// Copyright (C) 2019 Claudiu Beznea (claudiu.beznea@microchip.com)
+/*
+ * 64-bit Periodic Interval Timer driver
+ *
+ * Copyright (C) 2019 Microchip Technology Inc. and its subsidiaries
+ *
+ * Author: Claudiu Beznea <claudiu.beznea@microchip.com>
+ */
 
 #include <linux/clk.h>
 #include <linux/clockchips.h>
@@ -11,149 +15,132 @@
 #include <linux/sched_clock.h>
 #include <linux/slab.h>
 
-#define MCHP_PIT64B_CR		0x00	/* Control Register */
-#define MCHP_PIT64B_CR_START	BIT(0)
-#define MCHP_PIT64B_CR_SWRST	BIT(8)
+#define MCHP_PIT64B_CR			0x00	/* Control Register */
+#define MCHP_PIT64B_CR_START		BIT(0)
+#define MCHP_PIT64B_CR_SWRST		BIT(8)
 
-#define MCHP_PIT64B_MR		0x04	/* Mode Register */
-#define MCHP_PIT64B_MR_CONT	BIT(0)
-#define MCHP_PIT64B_MR_SGCLK	BIT(3)
-#define MCHP_PIT64B_MR_SMOD	BIT(4)
-#define MCHP_PIT64B_MR_PRES	GENMASK(11, 8)
+#define MCHP_PIT64B_MR			0x04	/* Mode Register */
+#define MCHP_PIT64B_MR_CONT		BIT(0)
+#define MCHP_PIT64B_MR_ONE_SHOT		(0)
+#define MCHP_PIT64B_MR_SGCLK		BIT(3)
+#define MCHP_PIT64B_MR_PRES		GENMASK(11, 8)
 
-#define MCHP_PIT64B_LSB_PR	0x08	/* LSB Period Register */
+#define MCHP_PIT64B_LSB_PR		0x08	/* LSB Period Register */
 
-#define MCHP_PIT64B_MSB_PR	0x0C	/* MSB Period Register */
+#define MCHP_PIT64B_MSB_PR		0x0C	/* MSB Period Register */
 
-#define MCHP_PIT64B_IER		0x10	/* Interrupt Enable Register */
-#define MCHP_PIT64B_IER_PERIOD	BIT(0)
+#define MCHP_PIT64B_IER			0x10	/* Interrupt Enable Register */
+#define MCHP_PIT64B_IER_PERIOD		BIT(0)
 
-#define MCHP_PIT64B_ISR		0x1C	/* Interrupt Status Register */
-#define MCHP_PIT64B_ISR_PERIOD	BIT(0)
+#define MCHP_PIT64B_ISR			0x1C	/* Interrupt Status Register */
 
-#define MCHP_PIT64B_TLSBR	0x20	/* Timer LSB Register */
+#define MCHP_PIT64B_TLSBR		0x20	/* Timer LSB Register */
 
-#define MCHP_PIT64B_TMSBR	0x24	/* Timer MSB Register */
+#define MCHP_PIT64B_TMSBR		0x24	/* Timer MSB Register */
 
-#define MCHP_PIT64B_PRES_MAX	0x10
-#define MCHP_PIT64B_DEF_FREQ	2500000UL	/* 2.5 MHz */
-#define MCHP_PIT64B_LSBMASK	GENMASK_ULL(31, 0)
-#define MCHP_PIT64B_PRESCALER(p)	(MCHP_PIT64B_MR_PRES & ((p) << 8))
+#define MCHP_PIT64B_PRES_MAX		0x10
+#define MCHP_PIT64B_LSBMASK		GENMASK_ULL(31, 0)
+#define MCHP_PIT64B_PRES_TO_MODE(p)	(MCHP_PIT64B_MR_PRES & ((p) << 8))
+#define MCHP_PIT64B_MODE_TO_PRES(m)	((MCHP_PIT64B_MR_PRES & (m)) >> 8)
+#define MCHP_PIT64B_DEF_CS_FREQ		5000000UL	/* 5 MHz */
+#define MCHP_PIT64B_DEF_CE_FREQ		32768		/* 32 KHz */
 
-#define MCHP_PIT64B_NAME	"pit64b"
+#define MCHP_PIT64B_NAME		"pit64b"
 
-struct mchp_pit64b_common_data {
-	void __iomem *base;
-	struct clk *pclk;
-	struct clk *gclk;
-	u64 cycles;
-	u8 pres;
+/**
+ * struct mchp_pit64b_timer - PIT64B timer data structure
+ * @base: base address of PIT64B hardware block
+ * @pclk: PIT64B's peripheral clock
+ * @gclk: PIT64B's generic clock
+ * @mode: precomputed value for mode register
+ */
+struct mchp_pit64b_timer {
+	void __iomem	*base;
+	struct clk	*pclk;
+	struct clk	*gclk;
+	u32		mode;
 };
 
-struct mchp_pit64b_clksrc_data {
-	struct clocksource *clksrc;
-	struct mchp_pit64b_common_data *cd;
+/**
+ * mchp_pit64b_clkevt - PIT64B clockevent data structure
+ * @timer: PIT64B timer
+ * @clkevt: clockevent
+ */
+struct mchp_pit64b_clkevt {
+	struct mchp_pit64b_timer	timer;
+	struct clock_event_device	clkevt;
 };
 
-struct mchp_pit64b_clkevt_data {
-	struct clock_event_device *clkevt;
-	struct mchp_pit64b_common_data *cd;
-};
+#define to_mchp_pit64b_timer(x) \
+	((struct mchp_pit64b_timer *)container_of(x,\
+		struct mchp_pit64b_clkevt, clkevt))
 
-static struct mchp_pit64b_data {
-	struct mchp_pit64b_clksrc_data *csd;
-	struct mchp_pit64b_clkevt_data *ced;
-} data;
+/* Base address for clocksource timer. */
+static void __iomem *mchp_pit64b_cs_base;
+/* Default cycles for clockevent timer. */
+static u64 mchp_pit64b_ce_cycles;
 
-static inline u32 mchp_pit64b_read(void __iomem *base, u32 offset)
+static inline u64 mchp_pit64b_cnt_read(void __iomem *base)
 {
-	return readl_relaxed(base + offset);
-}
+	unsigned long	flags;
+	u32		low, high;
 
-static inline void mchp_pit64b_write(void __iomem *base, u32 offset, u32 val)
-{
-	writel_relaxed(val, base + offset);
-}
+	raw_local_irq_save(flags);
 
-static inline u64 mchp_pit64b_get_period(void __iomem *base)
-{
-	u32 lsb, msb;
-
-	/* LSB must be read first to guarantee an atomic read of the 64 bit
-	 * timer.
+	/*
+	 * When using a 64 bit period TLSB must be read first, followed by the
+	 * read of TMSB. This sequence generates an atomic read of the 64 bit
+	 * timer value whatever the lapse of time between the accesses.
 	 */
-	lsb = mchp_pit64b_read(base, MCHP_PIT64B_TLSBR);
-	msb = mchp_pit64b_read(base, MCHP_PIT64B_TMSBR);
+	low = readl_relaxed(base + MCHP_PIT64B_TLSBR);
+	high = readl_relaxed(base + MCHP_PIT64B_TMSBR);
 
-	return (((u64)msb << 32) | lsb);
+	raw_local_irq_restore(flags);
+
+	return (((u64)high << 32) | low);
 }
 
-static inline void mchp_pit64b_set_period(void __iomem *base, u64 cycles)
+static inline void mchp_pit64b_reset(struct mchp_pit64b_timer *timer,
+				     u64 cycles, u32 mode, u32 irqs)
 {
-	u32 lsb, msb;
+	u32 low, high;
 
-	lsb = cycles & MCHP_PIT64B_LSBMASK;
-	msb = cycles >> 32;
+	low = cycles & MCHP_PIT64B_LSBMASK;
+	high = cycles >> 32;
 
-	/* LSB must be write last to guarantee an atomic update of the timer
-	 * even when SMOD=1.
-	 */
-	mchp_pit64b_write(base, MCHP_PIT64B_MSB_PR, msb);
-	mchp_pit64b_write(base, MCHP_PIT64B_LSB_PR, lsb);
+	writel_relaxed(MCHP_PIT64B_CR_SWRST, timer->base + MCHP_PIT64B_CR);
+	writel_relaxed(mode | timer->mode, timer->base + MCHP_PIT64B_MR);
+	writel_relaxed(high, timer->base + MCHP_PIT64B_MSB_PR);
+	writel_relaxed(low, timer->base + MCHP_PIT64B_LSB_PR);
+	writel_relaxed(irqs, timer->base + MCHP_PIT64B_IER);
+	writel_relaxed(MCHP_PIT64B_CR_START, timer->base + MCHP_PIT64B_CR);
 }
 
-static inline void mchp_pit64b_reset(struct mchp_pit64b_common_data *data,
-				     u32 mode, bool irq_ena)
+static u64 mchp_pit64b_clksrc_read(struct clocksource *cs)
 {
-	mode |= MCHP_PIT64B_PRESCALER(data->pres);
-	if (data->gclk)
-		mode |= MCHP_PIT64B_MR_SGCLK;
-
-	mchp_pit64b_write(data->base, MCHP_PIT64B_CR, MCHP_PIT64B_CR_SWRST);
-	mchp_pit64b_write(data->base, MCHP_PIT64B_MR, mode);
-	mchp_pit64b_set_period(data->base, data->cycles);
-	if (irq_ena)
-		mchp_pit64b_write(data->base, MCHP_PIT64B_IER,
-				  MCHP_PIT64B_IER_PERIOD);
-	mchp_pit64b_write(data->base, MCHP_PIT64B_CR, MCHP_PIT64B_CR_START);
+	return mchp_pit64b_cnt_read(mchp_pit64b_cs_base);
 }
 
-static u64 mchp_pit64b_read_clk(struct clocksource *cs)
+static u64 mchp_pit64b_sched_read_clk(void)
 {
-	return mchp_pit64b_get_period(data.csd->cd->base);
+	return mchp_pit64b_cnt_read(mchp_pit64b_cs_base);
 }
-
-static u64 mchp_sched_read_clk(void)
-{
-	return mchp_pit64b_get_period(data.csd->cd->base);
-}
-
-static struct clocksource mchp_pit64b_clksrc = {
-	.name = MCHP_PIT64B_NAME,
-	.mask = CLOCKSOURCE_MASK(64),
-	.flags = CLOCK_SOURCE_IS_CONTINUOUS,
-	.rating = 210,
-	.read = mchp_pit64b_read_clk,
-};
 
 static int mchp_pit64b_clkevt_shutdown(struct clock_event_device *cedev)
 {
-	mchp_pit64b_write(data.ced->cd->base, MCHP_PIT64B_CR,
-			  MCHP_PIT64B_CR_SWRST);
+	struct mchp_pit64b_timer *timer = to_mchp_pit64b_timer(cedev);
+
+	writel_relaxed(MCHP_PIT64B_CR_SWRST, timer->base + MCHP_PIT64B_CR);
 
 	return 0;
 }
 
 static int mchp_pit64b_clkevt_set_periodic(struct clock_event_device *cedev)
 {
-	mchp_pit64b_reset(data.ced->cd, MCHP_PIT64B_MR_CONT, true);
+	struct mchp_pit64b_timer *timer = to_mchp_pit64b_timer(cedev);
 
-	return 0;
-}
-
-static int mchp_pit64b_clkevt_set_oneshot(struct clock_event_device *cedev)
-{
-	mchp_pit64b_reset(data.ced->cd, MCHP_PIT64B_MR_SMOD, true);
+	mchp_pit64b_reset(timer, mchp_pit64b_ce_cycles, MCHP_PIT64B_MR_CONT,
+			  MCHP_PIT64B_IER_PERIOD);
 
 	return 0;
 }
@@ -161,66 +148,47 @@ static int mchp_pit64b_clkevt_set_oneshot(struct clock_event_device *cedev)
 static int mchp_pit64b_clkevt_set_next_event(unsigned long evt,
 					     struct clock_event_device *cedev)
 {
-	mchp_pit64b_set_period(data.ced->cd->base, evt);
-	mchp_pit64b_write(data.ced->cd->base, MCHP_PIT64B_CR,
-			  MCHP_PIT64B_CR_START);
+	struct mchp_pit64b_timer *timer = to_mchp_pit64b_timer(cedev);
+
+	mchp_pit64b_reset(timer, evt, MCHP_PIT64B_MR_ONE_SHOT,
+			  MCHP_PIT64B_IER_PERIOD);
 
 	return 0;
 }
 
 static void mchp_pit64b_clkevt_suspend(struct clock_event_device *cedev)
 {
-	mchp_pit64b_write(data.ced->cd->base, MCHP_PIT64B_CR,
-			  MCHP_PIT64B_CR_SWRST);
-	if (data.ced->cd->gclk)
-		clk_disable_unprepare(data.ced->cd->gclk);
-	clk_disable_unprepare(data.ced->cd->pclk);
+	struct mchp_pit64b_timer *timer = to_mchp_pit64b_timer(cedev);
+
+	writel_relaxed(MCHP_PIT64B_CR_SWRST, timer->base + MCHP_PIT64B_CR);
+	if (timer->mode & MCHP_PIT64B_MR_SGCLK)
+		clk_disable_unprepare(timer->gclk);
+	clk_disable_unprepare(timer->pclk);
 }
 
 static void mchp_pit64b_clkevt_resume(struct clock_event_device *cedev)
 {
-	u32 mode = MCHP_PIT64B_MR_SMOD;
+	struct mchp_pit64b_timer *timer = to_mchp_pit64b_timer(cedev);
 
-	clk_prepare_enable(data.ced->cd->pclk);
-	if (data.ced->cd->gclk)
-		clk_prepare_enable(data.ced->cd->gclk);
-
-	if (clockevent_state_periodic(data.ced->clkevt))
-		mode = MCHP_PIT64B_MR_CONT;
-
-	mchp_pit64b_reset(data.ced->cd, mode, true);
+	clk_prepare_enable(timer->pclk);
+	if (timer->mode & MCHP_PIT64B_MR_SGCLK)
+		clk_prepare_enable(timer->gclk);
 }
-
-static struct clock_event_device mchp_pit64b_clkevt = {
-	.name = MCHP_PIT64B_NAME,
-	.features = CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_PERIODIC,
-	.rating = 150,
-	.set_state_shutdown = mchp_pit64b_clkevt_shutdown,
-	.set_state_periodic = mchp_pit64b_clkevt_set_periodic,
-	.set_state_oneshot = mchp_pit64b_clkevt_set_oneshot,
-	.set_next_event = mchp_pit64b_clkevt_set_next_event,
-	.suspend = mchp_pit64b_clkevt_suspend,
-	.resume = mchp_pit64b_clkevt_resume,
-};
 
 static irqreturn_t mchp_pit64b_interrupt(int irq, void *dev_id)
 {
-	struct mchp_pit64b_clkevt_data *irq_data = dev_id;
+	struct mchp_pit64b_clkevt *irq_data = dev_id;
 
-	if (data.ced != irq_data)
-		return IRQ_NONE;
+	/* Need to clear the interrupt. */
+	readl_relaxed(irq_data->timer.base + MCHP_PIT64B_ISR);
 
-	if (mchp_pit64b_read(irq_data->cd->base, MCHP_PIT64B_ISR) &
-	    MCHP_PIT64B_ISR_PERIOD) {
-		irq_data->clkevt->event_handler(irq_data->clkevt);
-		return IRQ_HANDLED;
-	}
+	irq_data->clkevt.event_handler(&irq_data->clkevt);
 
-	return IRQ_NONE;
+	return IRQ_HANDLED;
 }
 
-static int __init mchp_pit64b_pres_compute(u32 *pres, u32 clk_rate,
-					   u32 max_rate)
+static void __init mchp_pit64b_pres_compute(u32 *pres, u32 clk_rate,
+					    u32 max_rate)
 {
 	u32 tmp;
 
@@ -230,235 +198,255 @@ static int __init mchp_pit64b_pres_compute(u32 *pres, u32 clk_rate,
 			break;
 	}
 
+	/* Use the bigest prescaler if we didn't match one. */
 	if (*pres == MCHP_PIT64B_PRES_MAX)
-		return -EINVAL;
-
-	return 0;
+		*pres = MCHP_PIT64B_PRES_MAX - 1;
 }
 
-static int __init mchp_pit64b_pres_prepare(struct mchp_pit64b_common_data *cd,
-					   unsigned long max_rate)
+/**
+ * mchp_pit64b_init_mode - prepare PIT64B mode register value to be used at
+ *			   runtime; this includes prescaler and SGCLK bit
+ *
+ * PIT64B timer may be fed by gclk or pclk. When gclk is used its rate has to
+ * be at least 3 times lower that pclk's rate. pclk rate is fixed, gclk rate
+ * could be changed via clock APIs. The chosen clock (pclk or gclk) could be
+ * divided by the internal PIT64B's divider.
+ *
+ * This function, first tries to use GCLK by requesting the desired rate from
+ * PMC and then using the internal PIT64B prescaler, if any, to reach the
+ * requested rate. If PCLK/GCLK < 3 (condition requested by PIT64B hardware)
+ * then the function falls back on using PCLK as clock source for PIT64B timer
+ * choosing the highest prescaler in case it doesn't locate one to match the
+ * requested frequency.
+ *
+ * Below is presented the PIT64B block in relation with PMC:
+ *
+ *                                PIT64B
+ *  PMC             +------------------------------------+
+ * +----+           |   +-----+                          |
+ * |    |-->gclk -->|-->|     |    +---------+  +-----+  |
+ * |    |           |   | MUX |--->| Divider |->|timer|  |
+ * |    |-->pclk -->|-->|     |    +---------+  +-----+  |
+ * +----+           |   +-----+                          |
+ *                  |      ^                             |
+ *                  |     sel                            |
+ *                  +------------------------------------+
+ *
+ * Where:
+ *	- gclk rate <= pclk rate/3
+ *	- gclk rate could be requested from PMC
+ *	- pclk rate is fixed (cannot be requested from PMC)
+ */
+static int __init mchp_pit64b_init_mode(struct mchp_pit64b_timer *timer,
+					unsigned long max_rate)
 {
 	unsigned long pclk_rate, diff = 0, best_diff = ULONG_MAX;
 	long gclk_round = 0;
 	u32 pres, best_pres = 0;
-	int ret = 0;
 
-	pclk_rate = clk_get_rate(cd->pclk);
+	pclk_rate = clk_get_rate(timer->pclk);
 	if (!pclk_rate)
 		return -EINVAL;
 
-	if (cd->gclk) {
-		gclk_round = clk_round_rate(cd->gclk, max_rate);
-		if (gclk_round < 0)
-			goto pclk;
+	timer->mode = 0;
 
-		if (pclk_rate / gclk_round < 3)
-			goto pclk;
+	/* Try using GCLK. */
+	gclk_round = clk_round_rate(timer->gclk, max_rate);
+	if (gclk_round < 0)
+		goto pclk;
 
-		ret = mchp_pit64b_pres_compute(&pres, gclk_round, max_rate);
-		if (ret)
-			best_diff = abs(gclk_round - max_rate);
-		else
-			best_diff = abs(gclk_round / (pres + 1) - max_rate);
-		best_pres = pres;
+	if (pclk_rate / gclk_round < 3)
+		goto pclk;
+
+	mchp_pit64b_pres_compute(&pres, gclk_round, max_rate);
+	best_diff = abs(gclk_round / (pres + 1) - max_rate);
+	best_pres = pres;
+
+	if (!best_diff) {
+		timer->mode |= MCHP_PIT64B_MR_SGCLK;
+		clk_set_rate(timer->gclk, gclk_round);
+		goto done;
 	}
 
 pclk:
 	/* Check if requested rate could be obtained using PCLK. */
-	ret = mchp_pit64b_pres_compute(&pres, pclk_rate, max_rate);
-	if (ret)
-		diff = abs(pclk_rate - max_rate);
-	else
-		diff = abs(pclk_rate / (pres + 1) - max_rate);
+	mchp_pit64b_pres_compute(&pres, pclk_rate, max_rate);
+	diff = abs(pclk_rate / (pres + 1) - max_rate);
 
 	if (best_diff > diff) {
 		/* Use PCLK. */
-		cd->gclk = NULL;
 		best_pres = pres;
 	} else {
-		clk_set_rate(cd->gclk, gclk_round);
+		/* Use GCLK. */
+		timer->mode |= MCHP_PIT64B_MR_SGCLK;
+		clk_set_rate(timer->gclk, gclk_round);
 	}
 
-	cd->pres = best_pres;
+done:
+	timer->mode |= MCHP_PIT64B_PRES_TO_MODE(best_pres);
 
 	pr_info("PIT64B: using clk=%s with prescaler %u, freq=%lu [Hz]\n",
-		cd->gclk ? "gclk" : "pclk", cd->pres,
-		cd->gclk ? gclk_round / (cd->pres + 1)
-			 : pclk_rate / (cd->pres + 1));
+		timer->mode & MCHP_PIT64B_MR_SGCLK ? "gclk" : "pclk", best_pres,
+		timer->mode & MCHP_PIT64B_MR_SGCLK ?
+		gclk_round / (best_pres + 1) : pclk_rate / (best_pres + 1));
 
 	return 0;
 }
 
-static int __init mchp_pit64b_dt_init_clksrc(struct mchp_pit64b_common_data *cd)
+static int __init mchp_pit64b_init_clksrc(struct mchp_pit64b_timer *timer,
+					  u32 clk_rate)
 {
-	struct mchp_pit64b_clksrc_data *csd;
-	unsigned long clk_rate;
 	int ret;
 
-	csd = kzalloc(sizeof(*csd), GFP_KERNEL);
-	if (!csd)
-		return -ENOMEM;
+	mchp_pit64b_reset(timer, ULLONG_MAX, MCHP_PIT64B_MR_CONT, 0);
 
-	csd->cd = cd;
+	mchp_pit64b_cs_base = timer->base;
 
-	if (csd->cd->gclk)
-		clk_rate = clk_get_rate(csd->cd->gclk);
-	else
-		clk_rate = clk_get_rate(csd->cd->pclk);
-
-	clk_rate = clk_rate / (cd->pres + 1);
-	csd->cd->cycles = ULLONG_MAX;
-	mchp_pit64b_reset(csd->cd, MCHP_PIT64B_MR_CONT, false);
-
-	data.csd = csd;
-
-	csd->clksrc = &mchp_pit64b_clksrc;
-
-	ret = clocksource_register_hz(csd->clksrc, clk_rate);
+	ret = clocksource_mmio_init(timer->base, MCHP_PIT64B_NAME, clk_rate,
+				    210, 64, mchp_pit64b_clksrc_read);
 	if (ret) {
 		pr_debug("clksrc: Failed to register PIT64B clocksource!\n");
-		goto free;
+
+		/* Stop timer. */
+		writel_relaxed(MCHP_PIT64B_CR_SWRST,
+			       timer->base + MCHP_PIT64B_CR);
+
+		return ret;
 	}
 
-	sched_clock_register(mchp_sched_read_clk, 64, clk_rate);
+	sched_clock_register(mchp_pit64b_sched_read_clk, 64, clk_rate);
 
 	return 0;
-
-free:
-	kfree(csd);
-	data.csd = NULL;
-
-	return ret;
 }
 
-static int __init mchp_pit64b_dt_init_clkevt(struct mchp_pit64b_common_data *cd,
-					     u32 irq)
+static int __init mchp_pit64b_init_clkevt(struct mchp_pit64b_timer *timer,
+					  u32 clk_rate, u32 irq)
 {
-	struct mchp_pit64b_clkevt_data *ced;
-	unsigned long clk_rate;
+	struct mchp_pit64b_clkevt *ce;
 	int ret;
 
-	ced = kzalloc(sizeof(*ced), GFP_KERNEL);
-	if (!ced)
+	ce = kzalloc(sizeof(*ce), GFP_KERNEL);
+	if (!ce)
 		return -ENOMEM;
 
-	ced->cd = cd;
+	mchp_pit64b_ce_cycles = DIV_ROUND_CLOSEST(clk_rate, HZ);
 
-	if (ced->cd->gclk)
-		clk_rate = clk_get_rate(ced->cd->gclk);
-	else
-		clk_rate = clk_get_rate(ced->cd->pclk);
+	ce->timer.base = timer->base;
+	ce->timer.pclk = timer->pclk;
+	ce->timer.gclk = timer->gclk;
+	ce->timer.mode = timer->mode;
+	ce->clkevt.name = MCHP_PIT64B_NAME;
+	ce->clkevt.features = CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_PERIODIC;
+	ce->clkevt.rating = 150;
+	ce->clkevt.set_state_shutdown = mchp_pit64b_clkevt_shutdown;
+	ce->clkevt.set_state_periodic = mchp_pit64b_clkevt_set_periodic;
+	ce->clkevt.set_next_event = mchp_pit64b_clkevt_set_next_event;
+	ce->clkevt.suspend = mchp_pit64b_clkevt_suspend;
+	ce->clkevt.resume = mchp_pit64b_clkevt_resume;
+	ce->clkevt.cpumask = cpumask_of(0);
+	ce->clkevt.irq = irq;
 
-	clk_rate = clk_rate / (ced->cd->pres + 1);
-	ced->cd->cycles = DIV_ROUND_CLOSEST(clk_rate, HZ);
-
-	ret = request_irq(irq, mchp_pit64b_interrupt, IRQF_TIMER, "pit64b_tick",
-			  ced);
+	ret = request_irq(irq, mchp_pit64b_interrupt, IRQF_TIMER,
+			  "pit64b_tick", ce);
 	if (ret) {
 		pr_debug("clkevt: Failed to setup PIT64B IRQ\n");
-		goto free;
+		kfree(ce);
+		return ret;
 	}
 
-	data.ced = ced;
+	clockevents_config_and_register(&ce->clkevt, clk_rate, 1, ULONG_MAX);
 
-	/* Set up and register clockevents. */
-	ced->clkevt = &mchp_pit64b_clkevt;
-	ced->clkevt->cpumask = cpumask_of(0);
-	ced->clkevt->irq = irq;
-	clockevents_config_and_register(ced->clkevt, clk_rate, 1, ULONG_MAX);
+	return 0;
+}
+
+static int __init mchp_pit64b_dt_init_timer(struct device_node *node,
+					    bool clkevt)
+{
+	u32 freq = clkevt ? MCHP_PIT64B_DEF_CE_FREQ : MCHP_PIT64B_DEF_CS_FREQ;
+	struct mchp_pit64b_timer timer;
+	unsigned long clk_rate;
+	u32 irq = 0;
+	int ret;
+
+	/* Parse DT node. */
+	timer.pclk = of_clk_get_by_name(node, "pclk");
+	if (IS_ERR(timer.pclk))
+		return PTR_ERR(timer.pclk);
+
+	timer.gclk = of_clk_get_by_name(node, "gclk");
+	if (IS_ERR(timer.gclk))
+		return PTR_ERR(timer.gclk);
+
+	timer.base = of_iomap(node, 0);
+	if (!timer.base)
+		return -ENXIO;
+
+	if (clkevt) {
+		irq = irq_of_parse_and_map(node, 0);
+		if (!irq) {
+			ret = -ENODEV;
+			goto io_unmap;
+		}
+	}
+
+	/* Initialize mode (prescaler + SGCK bit). To be used at runtime. */
+	ret = mchp_pit64b_init_mode(&timer, freq);
+	if (ret)
+		goto irq_unmap;
+
+	ret = clk_prepare_enable(timer.pclk);
+	if (ret)
+		goto irq_unmap;
+
+	if (timer.mode & MCHP_PIT64B_MR_SGCLK) {
+		ret = clk_prepare_enable(timer.gclk);
+		if (ret)
+			goto pclk_unprepare;
+
+		clk_rate = clk_get_rate(timer.gclk);
+	} else {
+		clk_rate = clk_get_rate(timer.pclk);
+	}
+	clk_rate = clk_rate / (MCHP_PIT64B_MODE_TO_PRES(timer.mode) + 1);
+
+	if (clkevt)
+		ret = mchp_pit64b_init_clkevt(&timer, clk_rate, irq);
+	else
+		ret = mchp_pit64b_init_clksrc(&timer, clk_rate);
+
+	if (ret)
+		goto gclk_unprepare;
 
 	return 0;
 
-free:
-	kfree(ced);
-	data.ced = NULL;
+gclk_unprepare:
+	if (timer.mode & MCHP_PIT64B_MR_SGCLK)
+		clk_disable_unprepare(timer.gclk);
+pclk_unprepare:
+	clk_disable_unprepare(timer.pclk);
+irq_unmap:
+	irq_dispose_mapping(irq);
+io_unmap:
+	iounmap(timer.base);
 
 	return ret;
 }
 
 static int __init mchp_pit64b_dt_init(struct device_node *node)
 {
-	struct mchp_pit64b_common_data *cd;
-	u32 irq, freq = MCHP_PIT64B_DEF_FREQ;
-	int ret;
+	static int inits;
 
-	if (data.csd && data.ced)
-		return -EBUSY;
-
-	cd = kzalloc(sizeof(*cd), GFP_KERNEL);
-	if (!cd)
-		return -ENOMEM;
-
-	cd->pclk = of_clk_get_by_name(node, "pclk");
-	if (IS_ERR(cd->pclk)) {
-		ret = PTR_ERR(cd->pclk);
-		goto free;
+	switch (inits++) {
+	case 0:
+		/* 1st request, register clockevent. */
+		return mchp_pit64b_dt_init_timer(node, true);
+	case 1:
+		/* 2nd request, register clocksource. */
+		return mchp_pit64b_dt_init_timer(node, false);
 	}
 
-	cd->gclk = of_clk_get_by_name(node, "gclk");
-	if (IS_ERR(cd->gclk))
-		cd->gclk = NULL;
-
-	ret = of_property_read_u32(node, "clock-frequency", &freq);
-	if (ret)
-		pr_debug("PIT64B: failed to read clock frequency. Using default!\n");
-
-	ret = mchp_pit64b_pres_prepare(cd, freq);
-	if (ret)
-		goto free;
-
-	cd->base = of_iomap(node, 0);
-	if (!cd->base) {
-		pr_debug("%s: Could not map PIT64B address!\n",
-			 MCHP_PIT64B_NAME);
-		ret = -ENXIO;
-		goto free;
-	}
-
-	ret = clk_prepare_enable(cd->pclk);
-	if (ret)
-		goto unmap;
-
-	if (cd->gclk) {
-		ret = clk_prepare_enable(cd->gclk);
-		if (ret)
-			goto pclk_unprepare;
-	}
-
-	if (!data.ced) {
-		irq = irq_of_parse_and_map(node, 0);
-		if (!irq) {
-			pr_debug("%s: Failed to get PIT64B clockevent IRQ!\n",
-				 MCHP_PIT64B_NAME);
-			ret = -ENODEV;
-			goto gclk_unprepare;
-		}
-		ret = mchp_pit64b_dt_init_clkevt(cd, irq);
-		if (ret)
-			goto irq_unmap;
-	} else {
-		ret = mchp_pit64b_dt_init_clksrc(cd);
-		if (ret)
-			goto gclk_unprepare;
-	}
-
-	return 0;
-
-irq_unmap:
-	irq_dispose_mapping(irq);
-gclk_unprepare:
-	if (cd->gclk)
-		clk_disable_unprepare(cd->gclk);
-pclk_unprepare:
-	clk_disable_unprepare(cd->pclk);
-unmap:
-	iounmap(cd->base);
-free:
-	kfree(cd);
-
-	return ret;
+	/* The rest, don't care. */
+	return -EINVAL;
 }
 
-CLOCKSOURCE_OF_DECLARE(mchp_pit64b_clksrc, "microchip,sam9x60-pit64b",
-		       mchp_pit64b_dt_init);
+TIMER_OF_DECLARE(mchp_pit64b, "microchip,sam9x60-pit64b", mchp_pit64b_dt_init);

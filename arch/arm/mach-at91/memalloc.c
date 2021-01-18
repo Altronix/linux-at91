@@ -78,7 +78,7 @@ static int allocate_large_block(struct device *dev, struct memalloc_block **pp_b
 	p->size = PAGE_ALIGN(*p_size);
 
 	/* Multiple of PAGE_SIZE */
-	p->virt_addr = dma_zalloc_coherent(dev, p->size, &p->dma_handle, GFP_KERNEL);
+	p->virt_addr = dma_alloc_coherent(dev, p->size, &p->dma_handle, GFP_KERNEL);
 	if (!p->virt_addr) {
 		dev_err(dev, "large alloc failed (%d)\n", p->size);
 		kfree(p);

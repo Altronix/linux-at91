@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ADS1015 - Texas Instruments Analog-to-Digital Converter
  *
  * Copyright (c) 2016, Intel Corporation.
- *
- * This file is subject to the terms and conditions of version 2 of
- * the GNU General Public License.  See the file COPYING in the main
- * directory of this archive for more details.
  *
  * IIO driver for ADS1015 ADC 7-bit I2C slave address:
  *	* 0x48 - ADDR connected to Ground
@@ -312,6 +309,7 @@ static const struct iio_chan_spec ads1115_channels[] = {
 	IIO_CHAN_SOFT_TIMESTAMP(ADS1015_TIMESTAMP),
 };
 
+#ifdef CONFIG_PM
 static int ads1015_set_power_state(struct ads1015_data *data, bool on)
 {
 	int ret;
@@ -328,6 +326,15 @@ static int ads1015_set_power_state(struct ads1015_data *data, bool on)
 
 	return ret < 0 ? ret : 0;
 }
+
+#else /* !CONFIG_PM */
+
+static int ads1015_set_power_state(struct ads1015_data *data, bool on)
+{
+	return 0;
+}
+
+#endif /* !CONFIG_PM */
 
 static
 int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)

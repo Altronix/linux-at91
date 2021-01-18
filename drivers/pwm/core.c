@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Generic pwmlib implementation
  *
  * Copyright (C) 2011 Sascha Hauer <s.hauer@pengutronix.de>
  * Copyright (C) 2011-2012 Avionic Design GmbH
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2, or (at your option)
- *  any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/acpi.h>
@@ -461,23 +448,27 @@ EXPORT_SYMBOL_GPL(pwm_free);
 /**
  * pwm_apply_state() - atomically apply a new state to a PWM device
  * @pwm: PWM device
- * @state: new state to apply. This can be adjusted by the PWM driver
- *	   if the requested config is not achievable, for example,
- *	   ->duty_cycle and ->period might be approximated.
+ * @state: new state to apply
  */
-int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
+int pwm_apply_state(struct pwm_device *pwm, const struct pwm_state *state)
 {
+	struct pwm_chip *chip;
 	int err;
 
 	if (!pwm || !state || !state->period ||
 	    state->duty_cycle > state->period)
 		return -EINVAL;
 
-	if (!memcmp(state, &pwm->state, sizeof(*state)))
+	chip = pwm->chip;
+
+	if (state->period == pwm->state.period &&
+	    state->duty_cycle == pwm->state.duty_cycle &&
+	    state->polarity == pwm->state.polarity &&
+	    state->enabled == pwm->state.enabled)
 		return 0;
 
-	if (pwm->chip->ops->apply) {
-		err = pwm->chip->ops->apply(pwm->chip, pwm, state);
+	if (chip->ops->apply) {
+		err = chip->ops->apply(chip, pwm, state);
 		if (err)
 			return err;
 
@@ -487,7 +478,7 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 		 * FIXME: restore the initial state in case of error.
 		 */
 		if (state->polarity != pwm->state.polarity) {
-			if (!pwm->chip->ops->set_polarity)
+			if (!chip->ops->set_polarity)
 				return -ENOTSUPP;
 
 			/*
@@ -496,12 +487,12 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 			 * ->apply().
 			 */
 			if (pwm->state.enabled) {
-				pwm->chip->ops->disable(pwm->chip, pwm);
+				chip->ops->disable(chip, pwm);
 				pwm->state.enabled = false;
 			}
 
-			err = pwm->chip->ops->set_polarity(pwm->chip, pwm,
-							   state->polarity);
+			err = chip->ops->set_polarity(chip, pwm,
+						      state->polarity);
 			if (err)
 				return err;
 
@@ -510,9 +501,9 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 
 		if (state->period != pwm->state.period ||
 		    state->duty_cycle != pwm->state.duty_cycle) {
-			err = pwm->chip->ops->config(pwm->chip, pwm,
-						     state->duty_cycle,
-						     state->period);
+			err = chip->ops->config(pwm->chip, pwm,
+						state->duty_cycle,
+						state->period);
 			if (err)
 				return err;
 
@@ -522,11 +513,11 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 
 		if (state->enabled != pwm->state.enabled) {
 			if (state->enabled) {
-				err = pwm->chip->ops->enable(pwm->chip, pwm);
+				err = chip->ops->enable(chip, pwm);
 				if (err)
 					return err;
 			} else {
-				pwm->chip->ops->disable(pwm->chip, pwm);
+				chip->ops->disable(chip, pwm);
 			}
 
 			pwm->state.enabled = state->enabled;
@@ -1203,10 +1194,7 @@ static int pwm_seq_show(struct seq_file *s, void *v)
 		   dev_name(chip->dev), chip->npwm,
 		   (chip->npwm != 1) ? "s" : "");
 
-	if (chip->ops->dbg_show)
-		chip->ops->dbg_show(chip, s);
-	else
-		pwm_dbg_show(chip, s);
+	pwm_dbg_show(chip, s);
 
 	return 0;
 }

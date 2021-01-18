@@ -1,21 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HW_breakpoint: a unified kernel/user-space hardware breakpoint facility,
  * using the CPU's debug registers.
  *
  * Copyright (C) 2012 ARM Limited
  * Author: Will Deacon <will.deacon@arm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) "hw-breakpoint: " fmt
@@ -551,10 +540,14 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 			/* Allow halfword watchpoints and breakpoints. */
 			if (hw->ctrl.len == ARM_BREAKPOINT_LEN_2)
 				break;
+
+			/* Fallthrough */
 		case 3:
 			/* Allow single byte watchpoint. */
 			if (hw->ctrl.len == ARM_BREAKPOINT_LEN_1)
 				break;
+
+			/* Fallthrough */
 		default:
 			return -EINVAL;
 		}
@@ -737,6 +730,27 @@ static u64 get_distance_from_watchpoint(unsigned long addr, u64 val,
 		return 0;
 }
 
+static int watchpoint_report(struct perf_event *wp, unsigned long addr,
+			     struct pt_regs *regs)
+{
+	int step = is_default_overflow_handler(wp);
+	struct arch_hw_breakpoint *info = counter_arch_bp(wp);
+
+	info->trigger = addr;
+
+	/*
+	 * If we triggered a user watchpoint from a uaccess routine, then
+	 * handle the stepping ourselves since userspace really can't help
+	 * us with this.
+	 */
+	if (!user_mode(regs) && info->ctrl.privilege == AARCH64_BREAKPOINT_EL0)
+		step = 1;
+	else
+		perf_bp_event(wp, regs);
+
+	return step;
+}
+
 static int watchpoint_handler(unsigned long addr, unsigned int esr,
 			      struct pt_regs *regs)
 {
@@ -746,7 +760,6 @@ static int watchpoint_handler(unsigned long addr, unsigned int esr,
 	u64 val;
 	struct perf_event *wp, **slots;
 	struct debug_info *debug_info;
-	struct arch_hw_breakpoint *info;
 	struct arch_hw_breakpoint_ctrl ctrl;
 
 	slots = this_cpu_ptr(wp_on_reg);
@@ -784,25 +797,13 @@ static int watchpoint_handler(unsigned long addr, unsigned int esr,
 		if (dist != 0)
 			continue;
 
-		info = counter_arch_bp(wp);
-		info->trigger = addr;
-		perf_bp_event(wp, regs);
-
-		/* Do we need to handle the stepping? */
-		if (is_default_overflow_handler(wp))
-			step = 1;
+		step = watchpoint_report(wp, addr, regs);
 	}
-	if (min_dist > 0 && min_dist != -1) {
-		/* No exact match found. */
-		wp = slots[closest_match];
-		info = counter_arch_bp(wp);
-		info->trigger = addr;
-		perf_bp_event(wp, regs);
 
-		/* Do we need to handle the stepping? */
-		if (is_default_overflow_handler(wp))
-			step = 1;
-	}
+	/* No exact match found? */
+	if (min_dist > 0 && min_dist != -1)
+		step = watchpoint_report(slots[closest_match], addr, regs);
+
 	rcu_read_unlock();
 
 	if (!step)

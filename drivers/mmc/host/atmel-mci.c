@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Atmel MultiMedia Card Interface driver
  *
  * Copyright (C) 2004-2008 Atmel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/blkdev.h>
 #include <linux/clk.h>
@@ -42,6 +39,7 @@
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 #include <asm/unaligned.h>
+#include "../core/pwrseq.h"
 
 /*
  * Superset of MCI IP registers integrated in Atmel AT91 Processor
@@ -446,18 +444,7 @@ static int atmci_req_show(struct seq_file *s, void *v)
 	return 0;
 }
 
-static int atmci_req_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, atmci_req_show, inode->i_private);
-}
-
-static const struct file_operations atmci_req_fops = {
-	.owner		= THIS_MODULE,
-	.open		= atmci_req_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(atmci_req);
 
 static void atmci_show_status_reg(struct seq_file *s,
 		const char *regname, u32 value)
@@ -583,59 +570,25 @@ static int atmci_regs_show(struct seq_file *s, void *v)
 	return ret;
 }
 
-static int atmci_regs_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, atmci_regs_show, inode->i_private);
-}
-
-static const struct file_operations atmci_regs_fops = {
-	.owner		= THIS_MODULE,
-	.open		= atmci_regs_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(atmci_regs);
 
 static void atmci_init_debugfs(struct atmel_mci_slot *slot)
 {
 	struct mmc_host		*mmc = slot->mmc;
 	struct atmel_mci	*host = slot->host;
 	struct dentry		*root;
-	struct dentry		*node;
 
 	root = mmc->debugfs_root;
 	if (!root)
 		return;
 
-	node = debugfs_create_file("regs", S_IRUSR, root, host,
-			&atmci_regs_fops);
-	if (IS_ERR(node))
-		return;
-	if (!node)
-		goto err;
-
-	node = debugfs_create_file("req", S_IRUSR, root, slot, &atmci_req_fops);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_u32("state", S_IRUSR, root, (u32 *)&host->state);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("pending_events", S_IRUSR, root,
-				     (u32 *)&host->pending_events);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("completed_events", S_IRUSR, root,
-				     (u32 *)&host->completed_events);
-	if (!node)
-		goto err;
-
-	return;
-
-err:
-	dev_err(&mmc->class_dev, "failed to initialize debugfs for slot\n");
+	debugfs_create_file("regs", S_IRUSR, root, host, &atmci_regs_fops);
+	debugfs_create_file("req", S_IRUSR, root, slot, &atmci_req_fops);
+	debugfs_create_u32("state", S_IRUSR, root, &host->state);
+	debugfs_create_xul("pending_events", S_IRUSR, root,
+			   &host->pending_events);
+	debugfs_create_xul("completed_events", S_IRUSR, root,
+			   &host->completed_events);
 }
 
 #if defined(CONFIG_OF)
@@ -2348,6 +2301,7 @@ static int atmci_init_slot(struct atmel_mci *host,
 
 	host->slot[id] = slot;
 	mmc_regulator_get_supply(mmc);
+	mmc_pwrseq_alloc(slot->mmc);
 	mmc_add_host(mmc);
 
 	if (gpio_is_valid(slot->detect_pin)) {
@@ -2395,8 +2349,7 @@ static void atmci_cleanup_slot(struct atmel_mci_slot *slot,
 
 static int atmci_configure_dma(struct atmel_mci *host)
 {
-	host->dma.chan = dma_request_slave_channel_reason(&host->pdev->dev,
-							"rxtx");
+	host->dma.chan = dma_request_chan(&host->pdev->dev, "rxtx");
 
 	if (PTR_ERR(host->dma.chan) == -ENODEV) {
 		struct mci_platform_data *pdata = host->pdev->dev.platform_data;
@@ -2461,6 +2414,7 @@ static void atmci_get_cap(struct atmel_mci *host)
 	case 0x600:
 	case 0x500:
 		host->caps.has_odd_clk_div = 1;
+		/* Fall through */
 	case 0x400:
 	case 0x300:
 		host->caps.has_dma_conf_reg = 1;
@@ -2468,13 +2422,16 @@ static void atmci_get_cap(struct atmel_mci *host)
 		host->caps.has_cfg_reg = 1;
 		host->caps.has_cstor_reg = 1;
 		host->caps.has_highspeed = 1;
+		/* Fall through */
 	case 0x200:
 		host->caps.has_rwproof = 1;
 		host->caps.need_blksz_mul_4 = 0;
 		host->caps.need_notbusy_for_read_ops = 1;
+		/* Fall through */
 	case 0x100:
 		host->caps.has_bad_data_ordering = 0;
 		host->caps.need_reset_after_xfer = 0;
+		/* Fall through */
 	case 0x0:
 		break;
 	default:

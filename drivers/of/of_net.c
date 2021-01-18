@@ -1,7 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OF helpers for network devices.
- *
- * This file is released under the GPLv2
  *
  * Initially copied out of arch/powerpc/kernel/prom_parse.c
  */
@@ -16,15 +15,19 @@
 /**
  * of_get_phy_mode - Get phy mode for given device_node
  * @np:	Pointer to the given device_node
+ * @interface: Pointer to the result
  *
  * The function gets phy interface string from property 'phy-mode' or
- * 'phy-connection-type', and return its index in phy_modes table, or errno in
- * error case.
+ * 'phy-connection-type'. The index in phy_modes table is set in
+ * interface and 0 returned. In case of error interface is set to
+ * PHY_INTERFACE_MODE_NA and an errno is returned, e.g. -ENODEV.
  */
-int of_get_phy_mode(struct device_node *np)
+int of_get_phy_mode(struct device_node *np, phy_interface_t *interface)
 {
 	const char *pm;
 	int err, i;
+
+	*interface = PHY_INTERFACE_MODE_NA;
 
 	err = of_property_read_string(np, "phy-mode", &pm);
 	if (err < 0)
@@ -33,8 +36,10 @@ int of_get_phy_mode(struct device_node *np)
 		return err;
 
 	for (i = 0; i < PHY_INTERFACE_MODE_MAX; i++)
-		if (!strcasecmp(pm, phy_modes(i)))
-			return i;
+		if (!strcasecmp(pm, phy_modes(i))) {
+			*interface = i;
+			return 0;
+		}
 
 	return -ENODEV;
 }
@@ -52,39 +57,25 @@ static const void *of_get_mac_addr(struct device_node *np, const char *name)
 static const void *of_get_mac_addr_nvmem(struct device_node *np)
 {
 	int ret;
-	u8 mac[ETH_ALEN];
-	struct property *pp;
+	const void *mac;
+	u8 nvmem_mac[ETH_ALEN];
 	struct platform_device *pdev = of_find_device_by_node(np);
 
 	if (!pdev)
 		return ERR_PTR(-ENODEV);
 
-	ret = nvmem_get_mac_address(&pdev->dev, &mac);
-	if (ret)
+	ret = nvmem_get_mac_address(&pdev->dev, &nvmem_mac);
+	if (ret) {
+		put_device(&pdev->dev);
 		return ERR_PTR(ret);
-
-	pp = devm_kzalloc(&pdev->dev, sizeof(*pp), GFP_KERNEL);
-	if (!pp)
-		return ERR_PTR(-ENOMEM);
-
-	pp->name = "nvmem-mac-address";
-	pp->length = ETH_ALEN;
-	pp->value = devm_kmemdup(&pdev->dev, mac, ETH_ALEN, GFP_KERNEL);
-	if (!pp->value) {
-		ret = -ENOMEM;
-		goto free;
 	}
 
-	ret = of_add_property(np, pp);
-	if (ret)
-		goto free;
+	mac = devm_kmemdup(&pdev->dev, nvmem_mac, ETH_ALEN, GFP_KERNEL);
+	put_device(&pdev->dev);
+	if (!mac)
+		return ERR_PTR(-ENOMEM);
 
-	return pp->value;
-free:
-	devm_kfree(&pdev->dev, pp->value);
-	devm_kfree(&pdev->dev, pp);
-
-	return ERR_PTR(ret);
+	return mac;
 }
 
 /**

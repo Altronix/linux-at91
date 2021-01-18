@@ -14,6 +14,7 @@ struct audioformat {
 	u64 formats;			/* ALSA format bits */
 	unsigned int channels;		/* # channels */
 	unsigned int fmt_type;		/* USB audio format type (1-3) */
+	unsigned int fmt_bits;		/* number of significant bits */
 	unsigned int frame_size;	/* samples per frame for non-audio */
 	int iface;			/* interface number */
 	unsigned char altsetting;	/* corresponding alternate setting */
@@ -103,10 +104,13 @@ struct snd_usb_endpoint {
 	int iface, altsetting;
 	int skip_packets;		/* quirks for devices to ignore the first n packets
 					   in a stream */
+	bool is_implicit_feedback;      /* This endpoint is used as implicit feedback */
 
 	spinlock_t lock;
 	struct list_head list;
 };
+
+struct media_ctl;
 
 struct snd_usb_substream {
 	struct snd_usb_stream *stream;
@@ -129,6 +133,7 @@ struct snd_usb_substream {
 	unsigned int tx_length_quirk:1;	/* add length specifier to transfers */
 	unsigned int fmt_type;		/* USB audio format type (1-3) */
 	unsigned int pkt_offset_adj;	/* Bytes to drop from beginning of packets (for non-compliant devices) */
+	unsigned int stream_offset_adj;	/* Bytes to drop from beginning of stream (for non-compliant devices) */
 
 	unsigned int running: 1;	/* running status */
 
@@ -142,6 +147,7 @@ struct snd_usb_substream {
 	struct snd_usb_endpoint *sync_endpoint;
 	unsigned long flags;
 	bool need_setup_ep;		/* (re)configure EP at prepare? */
+	bool need_setup_fmt;		/* (re)configure fmt after resume? */
 	unsigned int speed;		/* USB_SPEED_XXX */
 
 	u64 formats;			/* format bitmasks (all or'ed) */
@@ -160,6 +166,7 @@ struct snd_usb_substream {
 	} dsd_dop;
 
 	bool trigger_tstamp_pending_update; /* trigger timestamp being updated from initial estimate */
+	struct media_ctl *media_ctl;
 };
 
 struct snd_usb_stream {

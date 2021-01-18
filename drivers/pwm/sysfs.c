@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * A simple sysfs interface for the generic PWM framework
  *
  * Copyright (C) 2013 H Hartley Sweeten <hsweeten@visionengravers.com>
  *
  * Based on previous work by Lars Poeschel <poeschel@lemonage.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/device.h>
@@ -250,6 +241,7 @@ static void pwm_export_release(struct device *child)
 static int pwm_export_child(struct device *parent, struct pwm_device *pwm)
 {
 	struct pwm_export *export;
+	char *pwm_prop[2];
 	int ret;
 
 	if (test_and_set_bit(PWMF_EXPORTED, &pwm->flags))
@@ -277,6 +269,10 @@ static int pwm_export_child(struct device *parent, struct pwm_device *pwm)
 		export = NULL;
 		return ret;
 	}
+	pwm_prop[0] = kasprintf(GFP_KERNEL, "EXPORT=pwm%u", pwm->hwpwm);
+	pwm_prop[1] = NULL;
+	kobject_uevent_env(&parent->kobj, KOBJ_CHANGE, pwm_prop);
+	kfree(pwm_prop[0]);
 
 	return 0;
 }
@@ -289,6 +285,7 @@ static int pwm_unexport_match(struct device *child, void *data)
 static int pwm_unexport_child(struct device *parent, struct pwm_device *pwm)
 {
 	struct device *child;
+	char *pwm_prop[2];
 
 	if (!test_and_clear_bit(PWMF_EXPORTED, &pwm->flags))
 		return -ENODEV;
@@ -296,6 +293,11 @@ static int pwm_unexport_child(struct device *parent, struct pwm_device *pwm)
 	child = device_find_child(parent, pwm, pwm_unexport_match);
 	if (!child)
 		return -ENODEV;
+
+	pwm_prop[0] = kasprintf(GFP_KERNEL, "UNEXPORT=pwm%u", pwm->hwpwm);
+	pwm_prop[1] = NULL;
+	kobject_uevent_env(&parent->kobj, KOBJ_CHANGE, pwm_prop);
+	kfree(pwm_prop[0]);
 
 	/* for device_find_child() */
 	put_device(child);

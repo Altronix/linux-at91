@@ -149,7 +149,7 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 		break;
 	case PCI_VENDOR_ID_AMD:
 		/* AMD PLL quirk */
-		if (usb_amd_find_chipset_info())
+		if (usb_amd_quirk_pll_check())
 			ehci->amd_pll_fix = 1;
 		/* AMD8111 EHCI doesn't work, according to AMD errata */
 		if (pdev->device == 0x7463) {
@@ -186,7 +186,7 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 		break;
 	case PCI_VENDOR_ID_ATI:
 		/* AMD PLL quirk */
-		if (usb_amd_find_chipset_info())
+		if (usb_amd_quirk_pll_check())
 			ehci->amd_pll_fix = 1;
 
 		/*
@@ -215,6 +215,13 @@ static int ehci_pci_setup(struct usb_hcd *hcd)
 		/* MosChip frame-index-register bug */
 		ehci_info(ehci, "applying MosChip frame-index workaround\n");
 		ehci->frame_index_bug = 1;
+		break;
+	case PCI_VENDOR_ID_HUAWEI:
+		/* Synopsys HC bug */
+		if (pdev->device == 0xa239) {
+			ehci_info(ehci, "applying Synopsys HC workaround\n");
+			ehci->has_synopsys_hc_bug = 1;
+		}
 		break;
 	}
 
